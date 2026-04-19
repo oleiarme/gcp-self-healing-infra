@@ -66,7 +66,7 @@ resource "google_compute_instance_template" "tpl" {
       db_host            = var.db_host
       db_user            = var.db_user
       n8n_encryption_key = var.n8n_encryption_key
-      cf_tunnel_token    = var.cf_tunnel_token
+      cf_tunnel_token    = var.CF_TUNNEL_TOKEN
     })
   }
 
