@@ -28,6 +28,24 @@ echo "=== Taming Docker CPU for e2-micro ==="
 # Создаем папку для настроек системного сервиса Docker
 mkdir -p /etc/systemd/system/docker.service.d
 
+# Оптимизация Docker для микро-инстанса
+mkdir -p /etc/docker
+cat <<EOF > /etc/docker/daemon.json
+{
+  "max-concurrent-downloads": 1,
+  "max-concurrent-uploads": 1,
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+
+# Настройка агрессивности Swap (меньше — лучше для HDD)
+sysctl -w vm.swappiness=10
+systemctl restart docker
+
 # Запрещаем Docker'у использовать больше 15% процессора
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
