@@ -62,6 +62,19 @@ services:
       - TUNNEL_TOKEN=${cf_tunnel_token}
 EOF
 
+echo "=== Gentle Pulling (Saving CPU Credits) ==="
+# Скачиваем тяжелый n8n и даем серверу 30 секунд отдыха
+docker-compose pull n8n
+echo "Resting for 30 seconds..."
+sleep 30
+
+# Скачиваем легкий туннель и снова отдыхаем
+docker-compose pull cloudflared
+echo "Resting for 15 seconds..."
+sleep 15
+
+echo "=== Starting Containers ==="
+# Теперь, когда всё скачано и распаковано, запуск займет 1 секунду
 docker-compose up -d
 
 echo "=== Startup complete ==="
