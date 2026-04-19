@@ -34,6 +34,11 @@ cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 CPUQuota=25%
 EOF
 
+cat <<EOF > /etc/systemd/system/containerd.service.d/throttle.conf
+[Service]
+CPUQuota=25%
+EOF
+
 # Применяем жесткие ограничения
 systemctl daemon-reload
 systemctl restart docker
