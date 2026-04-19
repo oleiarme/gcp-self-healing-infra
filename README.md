@@ -122,7 +122,7 @@ Push to `main` → CI/CD deploys automatically.
 
 ## Free Tier Compliance
 
-- **VM**: e2-micro (1 vCPU, 1 GB RAM) — always free in us-central1
+- **VM**: e2-micro (2 vCPU, 1 GB RAM) — always free in us-central1
 - **Disk**: 30 GB standard — within free tier
 - **Network**: STANDARD tier
 - Built-in guard checks disk/VM count before every apply
@@ -134,6 +134,7 @@ Push to `main` → CI/CD deploys automatically.
 ├── .github/
 │   └── workflows/
 │       └── deploy.yml        # CI/CD pipeline
+│       └── terraform.yml     # terrafrom validate
 ├── scripts/
 │   └── startup.sh            # VM bootstrap script
 ├── terraform/
