@@ -78,7 +78,7 @@ services:
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=postgres
       - DB_POSTGRESDB_USER=${db_user}
-      - DB_POSTGRESDB_PASSWORD=\${DB_PASSWORD}
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD} # Убрали слэш!
       - N8N_ENCRYPTION_KEY=${n8n_encryption_key}
       - EXECUTIONS_PROCESS=main
       - EXECUTIONS_MODE=regular
