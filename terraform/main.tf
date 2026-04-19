@@ -141,7 +141,7 @@ resource "null_resource" "free_tier_enforcer" {
 
       # 2. Считаем остаток
       DISK_COUNT=$(gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | wc -l)
-      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc l)
+      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc -l)
 
       echo "📊 Stats after cleanup: $VM_COUNT VMs, $DISK_COUNT Disks"
 
