@@ -3,7 +3,7 @@ terraform {
   
   # Это магическая кнопка, которая лечит ошибку 409
   backend "gcs" {
-}
+  }
 
   required_providers {
     google = {
@@ -54,14 +54,14 @@ resource "google_compute_health_check" "hc" {
 }
 
 resource "google_compute_instance_template" "tpl" {
-  depends_on = [null_resource.free_tier_enforcer]
+  depends_on   = [null_resource.free_tier_enforcer]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
 
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
     disk_size_gb = 30
-    auto_delete = true
+    auto_delete  = true
     boot         = true
   }
 
@@ -82,7 +82,7 @@ resource "google_compute_instance_template" "tpl" {
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
       db_host            = var.db_host
       db_user            = var.db_user
-      DB_PASSWORD        = var.db_password       
+      DB_PASSWORD        = var.db_password
       n8n_encryption_key = var.n8n_encryption_key
       cf_tunnel_token    = var.CF_TUNNEL_TOKEN
       db_name            = "postgres"
@@ -110,7 +110,7 @@ resource "google_compute_instance_group_manager" "mig" {
     initial_delay_sec = 1500
   }
 
-    update_policy {
+  update_policy {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
@@ -148,14 +148,13 @@ resource "null_resource" "free_tier_enforcer" {
         echo "⚠️ WARNING: Multiple disks detected ($DISK_COUNT)."
         # Если ВМ 0, а дисков > 0 — значит это зависшие загрузочные диски старых машин
         if [ "$VM_COUNT" -eq 0 ]; then
-             echo "🧨 Emergency cleaning of stuck boot disks..."
-             gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
+          echo "🧨 Emergency cleaning of stuck boot disks..."
+          gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
         else
-             echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
-             exit 1
+          echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
+          exit 1
         fi
       fi
     EOT
   }
 }
-
