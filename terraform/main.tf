@@ -1,10 +1,7 @@
 terraform {
   required_version = ">= 1.0"
 
-  # Это магическая кнопка, которая лечит ошибку 409
-  backend "gcs" {
-  }
-
+  
   required_providers {
     google = {
       source  = "hashicorp/google"
