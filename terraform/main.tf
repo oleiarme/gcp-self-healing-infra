@@ -3,7 +3,7 @@ terraform {
   
   # Это магическая кнопка, которая лечит ошибку 409
   backend "gcs" {
-     }
+}
 
   required_providers {
     google = {
@@ -61,7 +61,7 @@ resource "google_compute_instance_template" "tpl" {
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
     disk_size_gb = 30
-    auto_delete  = true 
+    auto_delete = true
     boot         = true
   }
 
