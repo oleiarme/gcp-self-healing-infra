@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./terraform
+        working-directory: ./terraform # Все команды будут выполняться здесь
 
     permissions:
       contents: read
@@ -27,60 +27,35 @@ jobs:
           
       - name: Smart Pre-deployment Cleanup
         run: |
-          echo "Starting smart cleanup to avoid conflicts..."
+          echo "Starting smart cleanup..."
           
-          # 1. Сначала удаляем Группу (она блокирует всё остальное)
-          echo "--- Checking Instance Group ---"
+          # 1. Удаляем Instance Group (чтобы освободить диск и ВМ)
           if gcloud compute instance-groups managed describe n8n-mig --zone=us-central1-a > /dev/null 2>&1; then
-            echo "⚠️ Instance group 'n8n-mig' found. Deleting (this takes time)..."
+            echo "⚠️ Deleting n8n-mig..."
             gcloud compute instance-groups managed delete n8n-mig --zone=us-central1-a --quiet
-            echo "Waiting 45 seconds for VMs to fully shut down..."
-            sleep 45
-          else
-            echo "✅ Instance group not found. Skipping."
+            sleep 40
           fi
-          
-          # 2. Секрет (Secret)
-          echo "--- Checking Secret ---"
-          if gcloud secrets describe db-password > /dev/null 2>&1; then
-            echo "⚠️ Secret 'db-password' found. Deleting..."
-            gcloud secrets delete db-password --quiet
-            echo "Waiting 10 seconds for API to update..."
-            sleep 10
-          else
-            echo "✅ Secret not found. Skipping."
+
+          # 2. ЧИСТКА ЛИШНИХ ДИСКОВ (Критично для Free Tier!)
+          # Ищем диски, которые не привязаны к машинам и удаляем их
+          ORPHANED_DISKS=$(gcloud compute disks list --filter="-users:*" --format="value(name)")
+          if [ ! -z "$ORPHANED_DISKS" ]; then
+            echo "⚠️ Found orphaned disks: $ORPHANED_DISKS. Deleting to save money..."
+            for disk in $ORPHANED_DISKS; do
+              gcloud compute disks delete $disk --zone=us-central1-a --quiet
+            done
           fi
-          
-          # 3. Сервисный аккаунт (Service Account)
-          echo "--- Checking Service Account ---"
-          if gcloud iam service-accounts describe n8n-vm-sa@idealist-426118.iam.gserviceaccount.com > /dev/null 2>&1; then
-            echo "⚠️ Service account 'n8n-vm-sa' found. Deleting..."
-            gcloud iam service-accounts delete n8n-vm-sa@idealist-426118.iam.gserviceaccount.com --quiet
-            echo "Waiting 15 seconds for IAM to update..."
-            sleep 15
-          else
-            echo "✅ Service account not found. Skipping."
-          fi
-          
-          # 4. Проверка состояния (Health Check) - ТЕПЕРЬ ОНА СВОБОДНА!
-          echo "--- Checking Health Check ---"
+
+          # 3. Удаляем Health Check (он часто мешает пересозданию)
           if gcloud compute health-checks describe n8n-health-check --global > /dev/null 2>&1; then
-            echo "⚠️ Health check 'n8n-health-check' found. Deleting..."
             gcloud compute health-checks delete n8n-health-check --global --quiet
-            echo "Waiting 30 seconds for global network to update..."
-            sleep 30
-          else
-            echo "✅ Health check not found. Skipping."
           fi
-          
-          echo "Cleanup finished! The environment is ready for Terraform."
           
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
         run: terraform init
-        working-directory: terraform
 
       - name: Terraform Apply
         run: terraform apply -auto-approve
