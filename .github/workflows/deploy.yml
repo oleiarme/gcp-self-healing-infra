@@ -24,6 +24,22 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SA }}
+          
+      - name: Pre-deployment Cleanup
+        run: |
+          echo "Checking for existing resources to avoid conflicts..."
+          
+          # Delete Secret if exists
+          echo "Attempting to delete old secret..."
+          gcloud secrets delete db-password --quiet || echo "Secret not found, skipping."
+          
+          # Delete Service Account if exists
+          echo "Attempting to delete old service account..."
+          gcloud iam service-accounts delete n8n-vm-sa@idealist-426118.iam.gserviceaccount.com --quiet || echo "Service account not found, skipping."
+          
+          # Delete Health Check if exists
+          echo "Attempting to delete old health check..."
+          gcloud compute health-checks delete n8n-health-check --global --quiet || echo "Health check not found, skipping."
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
