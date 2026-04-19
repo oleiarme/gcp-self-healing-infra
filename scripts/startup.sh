@@ -46,7 +46,10 @@ EOF
 sysctl -w vm.swappiness=10
 systemctl restart docker
 
-# Запрещаем Docker'у использовать больше 15% процессора
+mkdir -p /etc/systemd/system/docker.service.d
+mkdir -p /etc/systemd/system/containerd.service.d
+
+# Запрещаем Docker'у использовать больше 25% процессора
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
 CPUQuota=25%
