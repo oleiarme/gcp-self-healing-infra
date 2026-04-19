@@ -24,6 +24,20 @@ echo "=== Install Docker ==="
 retry apt-get update
 retry apt-get install -y ca-certificates curl gnupg docker.io docker-compose
 
+echo "=== Taming Docker CPU for e2-micro ==="
+# Создаем папку для настроек системного сервиса Docker
+mkdir -p /etc/systemd/system/docker.service.d
+
+# Запрещаем Docker'у использовать больше 15% процессора
+cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
+[Service]
+CPUQuota=15%
+EOF
+
+# Применяем жесткие ограничения
+systemctl daemon-reload
+systemctl restart docker
+
 systemctl enable docker
 systemctl start docker
 
@@ -77,12 +91,12 @@ echo "=== Gentle Pulling (Saving CPU Credits) ==="
 # Скачиваем тяжелый n8n и даем серверу 30 секунд отдыха
 docker-compose pull n8n
 echo "Resting for 30 seconds..."
-sleep 30
+sleep 120
 
 # Скачиваем легкий туннель и снова отдыхаем
 docker-compose pull cloudflared
 echo "Resting for 15 seconds..."
-sleep 15
+sleep 60
 
 echo "=== Starting Containers ==="
 # Теперь, когда всё скачано и распаковано, запуск займет 1 секунду
