@@ -3,7 +3,7 @@ terraform {
   
   # Это магическая кнопка, которая лечит ошибку 409
   backend "gcs" {
-    bucket  = "idealist-426118" # ЗАМЕНИ на имя своего бакета (создай его в консоли GCP)
+    bucket  = "terraform-state-idealist426118" # ЗАМЕНИ на имя своего бакета (создай его в консоли GCP)
     prefix  = "terraform/state"
   }
 
