@@ -112,7 +112,7 @@ resource "google_compute_instance_group_manager" "mig" {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
-    max_unavailable_fixed = 1 # Сначала убить старую, потом создать новую
+    max_unavailable_fixed = 1 # Kill old instance first, then create new one
     replacement_method    = "RECREATE"
   }
 }
