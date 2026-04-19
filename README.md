@@ -5,7 +5,7 @@
 Production-grade self-healing infrastructure on **GCP Free Tier** that automatically recovers n8n if it crashes — using Managed Instance Group (MIG), health checks, and Cloudflare Tunnel.
 
 ## Architecture
-
+![GCP Self-Healing Infra Architecture](gcp_self_healing_infra_architecture.png)
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                    GitHub Actions CI/CD                   │
