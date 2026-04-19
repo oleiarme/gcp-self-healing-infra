@@ -25,25 +25,38 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SA }}
           
-      - name: Smart Pre-deployment Cleanup
+      - name: Hardcore Pre-deployment Cleanup
         run: |
-          echo "Starting smart cleanup..."
+          echo "🚀 Starting Bunker-Level Cleanup..."
           
-          # 1. Удаляем Instance Group (чтобы освободить диск и ВМ)
+          # 1. Жесткое удаление MIG с ожиданием
           if gcloud compute instance-groups managed describe n8n-mig --zone=us-central1-a > /dev/null 2>&1; then
-            echo "⚠️ Deleting n8n-mig..."
+            echo "⚠️ MIG found. Initiating delete..."
             gcloud compute instance-groups managed delete n8n-mig --zone=us-central1-a --quiet
-            sleep 40
+            
+            echo "⏳ Waiting for MIG and VMs to fully disappear..."
+            for i in {1..20}; do
+              if ! gcloud compute instance-groups managed describe n8n-mig --zone=us-central1-a > /dev/null 2>&1; then
+                echo "✅ MIG is gone!"
+                break
+              fi
+              echo "...still waiting ($i/20)..."
+              sleep 10
+            done
           fi
 
-          # 2. ЧИСТКА ЛИШНИХ ДИСКОВ (Критично для Free Tier!)
-          # Ищем диски, которые не привязаны к машинам и удаляем их
-          ORPHANED_DISKS=$(gcloud compute disks list --filter="-users:*" --format="value(name)")
-          if [ ! -z "$ORPHANED_DISKS" ]; then
-            echo "⚠️ Found orphaned disks: $ORPHANED_DISKS. Deleting to save money..."
-            for disk in $ORPHANED_DISKS; do
-              gcloud compute disks delete $disk --zone=us-central1-a --quiet
+          # 2. Тотальная зачистка дисков-сирот
+          # Мы ищем ВСЕ диски, которые не привязаны к машинам (orphaned)
+          echo "🔍 Searching for orphaned disks..."
+          ORPHAN_LIST=$(gcloud compute disks list --filter="-users:*" --format="value(name)")
+          
+          if [ ! -z "$ORPHAN_LIST" ]; then
+            for DISK in $OR_LIST; do
+              echo "🚫 Deleting orphaned disk: $DISK"
+              gcloud compute disks delete $DISK --zone=us-central1-a --quiet || true
             done
+          else
+            echo "✅ No orphaned disks found."
           fi
 
           # 3. Удаляем Health Check (он часто мешает пересозданию)
