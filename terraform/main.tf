@@ -111,7 +111,7 @@ resource "google_compute_instance_group_manager" "mig" {
     initial_delay_sec = 1500
   }
 
-    update_policy {
+  update_policy {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
