@@ -25,22 +25,45 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SA }}
           
-      - name: Pre-deployment Cleanup
+      - name: Smart Pre-deployment Cleanup
         run: |
-          echo "Checking for existing resources to avoid conflicts..."
+          echo "Starting smart cleanup to avoid 409 Conflict errors..."
           
-          # Delete Secret if exists
-          echo "Attempting to delete old secret..."
-          gcloud secrets delete db-password --quiet || echo "Secret not found, skipping."
+          # 1. Секрет (Secret)
+          echo "--- Checking Secret ---"
+          if gcloud secrets describe db-password > /dev/null 2>&1; then
+            echo "⚠️ Secret 'db-password' found. Deleting..."
+            gcloud secrets delete db-password --quiet
+            echo "Waiting 10 seconds for API to update..."
+            sleep 10
+          else
+            echo "✅ Secret not found. Skipping."
+          fi
           
-          # Delete Service Account if exists
-          echo "Attempting to delete old service account..."
-          gcloud iam service-accounts delete n8n-vm-sa@idealist-426118.iam.gserviceaccount.com --quiet || echo "Service account not found, skipping."
+          # 2. Сервисный аккаунт (Service Account)
+          echo "--- Checking Service Account ---"
+          if gcloud iam service-accounts describe n8n-vm-sa@idealist-426118.iam.gserviceaccount.com > /dev/null 2>&1; then
+            echo "⚠️ Service account 'n8n-vm-sa' found. Deleting..."
+            gcloud iam service-accounts delete n8n-vm-sa@idealist-426118.iam.gserviceaccount.com --quiet
+            echo "Waiting 15 seconds for IAM to update..."
+            sleep 15
+          else
+            echo "✅ Service account not found. Skipping."
+          fi
           
-          # Delete Health Check if exists
-          echo "Attempting to delete old health check..."
-          gcloud compute health-checks delete n8n-health-check --global --quiet || echo "Health check not found, skipping."
-
+          # 3. Проверка состояния (Health Check)
+          echo "--- Checking Health Check ---"
+          if gcloud compute health-checks describe n8n-health-check --global > /dev/null 2>&1; then
+            echo "⚠️ Health check 'n8n-health-check' found. Deleting..."
+            gcloud compute health-checks delete n8n-health-check --global --quiet
+            echo "Waiting 30 seconds for global network to update..."
+            sleep 30
+          else
+            echo "✅ Health check not found. Skipping."
+          fi
+          
+          echo "Cleanup finished! The environment is ready for Terraform."
+          
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
