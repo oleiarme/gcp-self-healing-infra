@@ -1,3 +1,19 @@
+terraform {
+  required_version = ">= 1.0"
+  
+  # Это магическая кнопка, которая лечит ошибку 409
+  backend "gcs" {
+    bucket  = "idealist-426118" # ЗАМЕНИ на имя своего бакета (создай его в консоли GCP)
+    prefix  = "terraform/state"
+  }
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 4.0"
+    }
+  }
+}
 provider "google" {
   project = var.project_id
   region  = var.region
