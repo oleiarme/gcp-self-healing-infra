@@ -27,9 +27,20 @@ jobs:
           
       - name: Smart Pre-deployment Cleanup
         run: |
-          echo "Starting smart cleanup to avoid 409 Conflict errors..."
+          echo "Starting smart cleanup to avoid conflicts..."
           
-          # 1. Секрет (Secret)
+          # 1. Сначала удаляем Группу (она блокирует всё остальное)
+          echo "--- Checking Instance Group ---"
+          if gcloud compute instance-groups managed describe n8n-mig --zone=us-central1-a > /dev/null 2>&1; then
+            echo "⚠️ Instance group 'n8n-mig' found. Deleting (this takes time)..."
+            gcloud compute instance-groups managed delete n8n-mig --zone=us-central1-a --quiet
+            echo "Waiting 45 seconds for VMs to fully shut down..."
+            sleep 45
+          else
+            echo "✅ Instance group not found. Skipping."
+          fi
+          
+          # 2. Секрет (Secret)
           echo "--- Checking Secret ---"
           if gcloud secrets describe db-password > /dev/null 2>&1; then
             echo "⚠️ Secret 'db-password' found. Deleting..."
@@ -40,7 +51,7 @@ jobs:
             echo "✅ Secret not found. Skipping."
           fi
           
-          # 2. Сервисный аккаунт (Service Account)
+          # 3. Сервисный аккаунт (Service Account)
           echo "--- Checking Service Account ---"
           if gcloud iam service-accounts describe n8n-vm-sa@idealist-426118.iam.gserviceaccount.com > /dev/null 2>&1; then
             echo "⚠️ Service account 'n8n-vm-sa' found. Deleting..."
@@ -51,7 +62,7 @@ jobs:
             echo "✅ Service account not found. Skipping."
           fi
           
-          # 3. Проверка состояния (Health Check)
+          # 4. Проверка состояния (Health Check) - ТЕПЕРЬ ОНА СВОБОДНА!
           echo "--- Checking Health Check ---"
           if gcloud compute health-checks describe n8n-health-check --global > /dev/null 2>&1; then
             echo "⚠️ Health check 'n8n-health-check' found. Deleting..."
