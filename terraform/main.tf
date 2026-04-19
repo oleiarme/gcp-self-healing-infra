@@ -123,17 +123,15 @@ resource "google_compute_instance_group_manager" "mig" {
 
 resource "null_resource" "free_tier_enforcer" {
   triggers = {
-    always_run = timestamp()  # ← пересоздаёт при каждом apply
+    always_run = timestamp()
   }
 
-  # Эта проверка запустится ПЕРЕД созданием чего-либо
   provisioner "local-exec" {
     command = <<EOT
       set -e
       ZONE="us-central1-a"
       
       echo "🛡 Running Hardened Free Tier Check..."
-
       # 1. Сначала чистим диски, которые реально ни к кому не привязаны
       ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
       for disk in $ORPHAN_DISKS; do
@@ -143,7 +141,7 @@ resource "null_resource" "free_tier_enforcer" {
 
       # 2. Считаем остаток
       DISK_COUNT=$(gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | wc -l)
-      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc -l)
+      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc l)
 
       echo "📊 Stats after cleanup: $VM_COUNT VMs, $DISK_COUNT Disks"
 
@@ -159,6 +157,7 @@ resource "null_resource" "free_tier_enforcer" {
              exit 1
         fi
       fi
+    EOT
   }
 }
 
