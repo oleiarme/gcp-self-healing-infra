@@ -71,6 +71,8 @@ resource "google_compute_instance_template" "tpl" {
       DB_PASSWORD        = var.db_password       
       n8n_encryption_key = var.n8n_encryption_key
       cf_tunnel_token    = var.CF_TUNNEL_TOKEN
+      db_name            = "postgres"
+      db_port            = "5432"
     })
   }
 
