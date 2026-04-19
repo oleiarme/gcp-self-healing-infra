@@ -110,13 +110,13 @@ resource "google_compute_instance_group_manager" "mig" {
     initial_delay_sec = 1500
   }
 
-  update_policy {
+    update_policy {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
-    max_unavailable_fixed = 1         # Сначала убить старую, потом создать новую
+    max_unavailable_fixed = 1  # Сначала убить старую, потом создать новую
     replacement_method    = "RECREATE"
-    }
+  }
 }
 
 resource "null_resource" "free_tier_enforcer" {
