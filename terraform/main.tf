@@ -65,6 +65,7 @@ resource "google_compute_instance_template" "tpl" {
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
       db_host            = var.db_host
       db_user            = var.db_user
+      db_password        = var.db_password       
       n8n_encryption_key = var.n8n_encryption_key
       cf_tunnel_token    = var.CF_TUNNEL_TOKEN
     })
