@@ -128,18 +128,19 @@ resource "null_resource" "free_tier_enforcer" {
       set -e
       echo "Checking Free Tier limits..."
       
-      # Считаем количество дисков в зоне
-      DISK_COUNT=$(gcloud compute disks list --zone=${var.zone} --format="value(name)" | wc -l)
+      # Исправленный фильтр по зоне
+      DISK_COUNT=$(gcloud compute disks list --filter="zone:( us-central1-a )" --format="value(name)" | wc -l)
       
-      # Считаем количество запущенных ВМ
+      # Исправленный подсчет ВМ
       VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING" --format="value(name)" | wc -l)
       
       echo "Current stats: $VM_COUNT VMs, $DISK_COUNT Disks"
       
+      # Лимит: 1 диск (загрузочный) допустим, если больше — стоп
       if [ "$DISK_COUNT" -gt 1 ]; then
-        echo "❌ ERROR: Too many disks! Found $DISK_COUNT. Manual cleanup required to stay FREE."
+        echo "❌ ERROR: Too many disks! Found $DISK_COUNT. Manual cleanup required."
         exit 1
-      fi
+      fi  
     EOT
   }
 }
