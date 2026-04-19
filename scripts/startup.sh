@@ -19,17 +19,19 @@ retry() {
   return 1
 }
 
-
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install -y ca-certificates curl gnupg docker.io docker-compose
+retry apt-get install -y ca-certificates curl gnupg docker.io
 
-echo "=== Taming Docker CPU for e2-micro ==="
-# Создаем папку для настроек системного сервиса Docker
-mkdir -p /etc/systemd/system/docker.service.d
+# Установка docker compose v2 plugin
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Оптимизация Docker для микро-инстанса
+echo "=== Taming Docker for e2-micro ==="
 mkdir -p /etc/docker
+# ЕДИНСТВЕННАЯ запись daemon.json — не перезаписывать ниже!
 cat <<EOF > /etc/docker/daemon.json
 {
   "max-concurrent-downloads": 1,
@@ -42,14 +44,9 @@ cat <<EOF > /etc/docker/daemon.json
 }
 EOF
 
-# Настройка агрессивности Swap (меньше — лучше для HDD)
-sysctl -w vm.swappiness=10
-systemctl restart docker
-
 mkdir -p /etc/systemd/system/docker.service.d
 mkdir -p /etc/systemd/system/containerd.service.d
 
-# Запрещаем Docker'у использовать больше 25% процессора
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
 CPUQuota=25%
@@ -60,34 +57,17 @@ cat <<EOF > /etc/systemd/system/containerd.service.d/throttle.conf
 CPUQuota=25%
 EOF
 
-# Применяем жесткие ограничения
+sysctl -w vm.swappiness=10
 systemctl daemon-reload
-systemctl restart docker
-
+retry systemctl restart docker
 systemctl enable docker
-systemctl start docker
-
-echo "=== Taming Docker for e2-micro ==="
-# Указываем Docker качать и распаковывать строго по 1 слою за раз
-cat <<EOF > /etc/docker/daemon.json
-{
-  "max-concurrent-downloads": 1,
-  "max-concurrent-uploads": 1
-}
-EOF
-# Перезапускаем Docker, чтобы он съел новые настройки
-systemctl restart docker
 
 echo "=== Get DB Password from Secret Manager ==="
-# Пытаемся достать секрет с явным указанием проекта и подавлением лишних логов
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="db-password" --project="idealist-426118" 2>/dev/null || echo "")
-
 if [ -z "$DB_PASSWORD" ]; then
   echo "❌ ERROR: Failed to get DB_PASSWORD from Secret Manager!"
-  # Если пароль критичен — выходим, если нет — ставим дефолт (но лучше выйти)
   exit 1
 fi
-echo "✅ Password retrieved successfully"
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
@@ -107,7 +87,7 @@ services:
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=postgres
       - DB_POSTGRESDB_USER=${db_user}
-      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD} # Убрали слэш!
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
       - N8N_ENCRYPTION_KEY=${n8n_encryption_key}
       - EXECUTIONS_PROCESS=main
       - EXECUTIONS_MODE=regular
@@ -122,18 +102,12 @@ services:
 EOF
 
 echo "=== Gentle Pulling (Saving CPU Credits) ==="
-# Скачиваем тяжелый n8n и даем серверу 30 секунд отдыха
-docker-compose pull n8n
-echo "Resting for 30 seconds..."
+docker compose pull n8n
 sleep 120
-
-# Скачиваем легкий туннель и снова отдыхаем
-docker-compose pull cloudflared
-echo "Resting for 15 seconds..."
+docker compose pull cloudflared
 sleep 60
 
 echo "=== Starting Containers ==="
-# Теперь, когда всё скачано и распаковано, запуск займет 1 секунду
-docker-compose up -d
+docker compose up -d
 
 echo "=== Startup complete ==="
