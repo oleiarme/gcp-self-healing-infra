@@ -122,6 +122,10 @@ resource "google_compute_instance_group_manager" "mig" {
 }
 
 resource "null_resource" "free_tier_enforcer" {
+  triggers = {
+    always_run = timestamp()  # ← пересоздаёт при каждом apply
+  }
+
   # Эта проверка запустится ПЕРЕД созданием чего-либо
   provisioner "local-exec" {
     command = <<EOT
