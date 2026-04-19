@@ -40,12 +40,15 @@ resource "google_compute_health_check" "hc" {
 }
 
 resource "google_compute_instance_template" "tpl" {
+  depends_on = [null_resource.free_tier_disk_guard]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
 
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
     disk_size_gb = 30
+    auto_delete  = true 
+    boot         = true
   }
 
   network_interface {
@@ -72,7 +75,7 @@ resource "google_compute_instance_template" "tpl" {
   }
 
   lifecycle {
-    create_before_destroy = true
+    create_before_destroy = false
   }
 }
 
@@ -96,5 +99,23 @@ resource "google_compute_instance_group_manager" "mig" {
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
     max_unavailable_fixed = 1
+  }
+}
+
+resource "null_resource" "free_tier_disk_guard" {
+  provisioner "local-exec" {
+    command = <<EOT
+      # Получаем список дисков, у которых НЕТ пользователей (инстансов)
+      ORPHANED_DISKS=$(gcloud compute disks list --filter="-users:*" --format="value(name)" | wc -l)
+      
+      if [ "$ORPHANED_DISKS" -gt 0 ]; then
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo "ОШИБКА: Найдено $ORPHANED_DISKS дисков без владельца!"
+        echo "Бесплатный лимит — 1 диск на 30ГБ. Удалите лишние диски вручную,"
+        echo "чтобы не платить деньги за превышение квоты."
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        exit 1
+      fi
+    EOT
   }
 }
