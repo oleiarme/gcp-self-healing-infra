@@ -100,8 +100,7 @@ resource "google_compute_instance_group_manager" "mig" {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
-    max_unavailable_fixed = 1
-  }
+    }
 }
 
 resource "null_resource" "free_tier_enforcer" {
