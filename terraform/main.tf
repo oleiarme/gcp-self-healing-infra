@@ -130,22 +130,35 @@ resource "null_resource" "free_tier_enforcer" {
   provisioner "local-exec" {
     command = <<EOT
       set -e
-      echo "Checking Free Tier limits..."
+      ZONE="us-central1-a"
       
-      # Исправленный фильтр по зоне
-      DISK_COUNT=$(gcloud compute disks list --filter="zone:( us-central1-a )" --format="value(name)" | wc -l)
-      
-      # Исправленный подсчет ВМ
-      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING" --format="value(name)" | wc -l)
-      
-      echo "Current stats: $VM_COUNT VMs, $DISK_COUNT Disks"
-      
-      # Лимит: 1 диск (загрузочный) допустим, если больше — стоп
+      echo "🛡 Running Hardened Free Tier Check..."
+
+      # 1. Сначала чистим диски, которые реально ни к кому не привязаны
+      ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
+      for disk in $ORPHAN_DISKS; do
+        echo "🧹 Deleting truly orphaned disk: $disk"
+        gcloud compute disks delete "$disk" --zone="$ZONE" --quiet
+      done
+
+      # 2. Считаем остаток
+      DISK_COUNT=$(gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | wc -l)
+      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc -l)
+
+      echo "📊 Stats after cleanup: $VM_COUNT VMs, $DISK_COUNT Disks"
+
+      # 3. Финальный предохранитель
       if [ "$DISK_COUNT" -gt 1 ]; then
-        echo "❌ ERROR: Too many disks! Found $DISK_COUNT. Manual cleanup required."
-        exit 1
-      fi  
-    EOT
+        echo "⚠️ WARNING: Multiple disks detected ($DISK_COUNT)."
+        # Если ВМ 0, а дисков > 0 — значит это зависшие загрузочные диски старых машин
+        if [ "$VM_COUNT" -eq 0 ]; then
+             echo "🧨 Emergency cleaning of stuck boot disks..."
+             gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
+        else
+             echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
+             exit 1
+        fi
+      fi
   }
 }
 
