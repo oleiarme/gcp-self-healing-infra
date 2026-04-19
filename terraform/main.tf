@@ -129,7 +129,6 @@ resource "null_resource" "free_tier_enforcer" {
     command = <<EOT
       set -e
       ZONE="us-central1-a"
-
       echo "🛡 Running Hardened Free Tier Check..."
       # 1. Сначала чистим диски, которые реально ни к кому не привязаны
       ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
