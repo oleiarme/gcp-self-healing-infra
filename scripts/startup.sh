@@ -31,7 +31,7 @@ mkdir -p /etc/systemd/system/docker.service.d
 # Запрещаем Docker'у использовать больше 15% процессора
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
-CPUQuota=15%
+CPUQuota=25%
 EOF
 
 # Применяем жесткие ограничения
