@@ -19,6 +19,7 @@ retry() {
   return 1
 }
 
+
 echo "=== Install Docker ==="
 retry apt-get update
 retry apt-get install -y ca-certificates curl gnupg docker.io docker-compose
@@ -61,6 +62,6 @@ services:
       - TUNNEL_TOKEN=${cf_tunnel_token}
 EOF
 
-docker compose up -d
+docker-compose up -d
 
 echo "=== Startup complete ==="
