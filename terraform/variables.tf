@@ -7,4 +7,4 @@ variable "db_user" {}
 variable "db_password" { sensitive = true }
 variable "n8n_encryption_key" { sensitive = true }
 
-variable "cf_tunnel_token" { sensitive = true }
+variable "CF_TUNNEL_TOKEN" { sensitive = true }
