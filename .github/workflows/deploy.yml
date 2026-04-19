@@ -31,4 +31,7 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve
-        working-directory: terraform
+        env:
+          TF_VAR_CF_TUNNEL_TOKEN: ${{ secrets.TF_VAR_CF_TUNNEL_TOKEN }}
+          TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+          TF_VAR_n8n_encryption_key: ${{ secrets.TF_VAR_n8n_encryption_key }}
