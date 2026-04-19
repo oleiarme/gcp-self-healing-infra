@@ -40,7 +40,7 @@ resource "google_compute_health_check" "hc" {
 }
 
 resource "google_compute_instance_template" "tpl" {
-  depends_on = [null_resource.free_tier_disk_guard]
+  depends_on = [null_resource.free_tier_enforcer]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
 
@@ -104,20 +104,26 @@ resource "google_compute_instance_group_manager" "mig" {
   }
 }
 
-resource "null_resource" "free_tier_disk_guard" {
+resource "null_resource" "free_tier_enforcer" {
+  # Эта проверка запустится ПЕРЕД созданием чего-либо
   provisioner "local-exec" {
     command = <<EOT
-      # Получаем список дисков, у которых НЕТ пользователей (инстансов)
-      ORPHANED_DISKS=$(gcloud compute disks list --filter="-users:*" --format="value(name)" | wc -l)
+      set -e
+      echo "Checking Free Tier limits..."
       
-      if [ "$ORPHANED_DISKS" -gt 0 ]; then
-        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        echo "ОШИБКА: Найдено $ORPHANED_DISKS дисков без владельца!"
-        echo "Бесплатный лимит — 1 диск на 30ГБ. Удалите лишние диски вручную,"
-        echo "чтобы не платить деньги за превышение квоты."
-        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+      # Считаем количество дисков в зоне
+      DISK_COUNT=$(gcloud compute disks list --zone=${var.zone} --format="value(name)" | wc -l)
+      
+      # Считаем количество запущенных ВМ
+      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING" --format="value(name)" | wc -l)
+      
+      echo "Current stats: $VM_COUNT VMs, $DISK_COUNT Disks"
+      
+      if [ "$DISK_COUNT" -gt 1 ]; then
+        echo "❌ ERROR: Too many disks! Found $DISK_COUNT. Manual cleanup required to stay FREE."
         exit 1
       fi
     EOT
   }
 }
+
