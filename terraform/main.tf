@@ -129,9 +129,8 @@ resource "null_resource" "free_tier_enforcer" {
     command = <<EOT
       set -e
       ZONE="us-central1-a"
-
-      echo "🛡 Running Hardened Free Tier Check..."
       
+      echo "🛡 Running Hardened Free Tier Check..."
       # 1. Сначала чистим диски, которые реально ни к кому не привязаны
       ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
       for disk in $ORPHAN_DISKS; do
@@ -150,11 +149,11 @@ resource "null_resource" "free_tier_enforcer" {
         echo "⚠️ WARNING: Multiple disks detected ($DISK_COUNT)."
         # Если ВМ 0, а дисков > 0 — значит это зависшие загрузочные диски старых машин
         if [ "$VM_COUNT" -eq 0 ]; then
-          echo "🧨 Emergency cleaning of stuck boot disks..."
-          gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
+             echo "🧨 Emergency cleaning of stuck boot disks..."
+             gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
         else
-          echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
-          exit 1
+             echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
+             exit 1
         fi
       fi
     EOT
