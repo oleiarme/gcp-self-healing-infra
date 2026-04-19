@@ -3,10 +3,7 @@ name: terraform-validate
 on:
   pull_request:
     branches: [ main ]
-    paths:
-      - 'terraform/**'
-      - 'scripts/**'
-
+      
 jobs:
   validate:
     name: Validate & Lint
