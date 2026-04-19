@@ -79,7 +79,15 @@ EOF
 systemctl restart docker
 
 echo "=== Get DB Password from Secret Manager ==="
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="db-password")
+# Пытаемся достать секрет с явным указанием проекта и подавлением лишних логов
+DB_PASSWORD=$(gcloud secrets versions access latest --secret="db-password" --project="idealist-426118" 2>/dev/null || echo "")
+
+if [ -z "$DB_PASSWORD" ]; then
+  echo "❌ ERROR: Failed to get DB_PASSWORD from Secret Manager!"
+  # Если пароль критичен — выходим, если нет — ставим дефолт (но лучше выйти)
+  exit 1
+fi
+echo "✅ Password retrieved successfully"
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
