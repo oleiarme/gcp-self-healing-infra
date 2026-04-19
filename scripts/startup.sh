@@ -27,6 +27,17 @@ retry apt-get install -y ca-certificates curl gnupg docker.io docker-compose
 systemctl enable docker
 systemctl start docker
 
+echo "=== Taming Docker for e2-micro ==="
+# Указываем Docker качать и распаковывать строго по 1 слою за раз
+cat <<EOF > /etc/docker/daemon.json
+{
+  "max-concurrent-downloads": 1,
+  "max-concurrent-uploads": 1
+}
+EOF
+# Перезапускаем Docker, чтобы он съел новые настройки
+systemctl restart docker
+
 echo "=== Get DB Password from Secret Manager ==="
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="db-password")
 
