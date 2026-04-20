@@ -62,10 +62,14 @@ systemctl daemon-reload
 retry systemctl restart docker
 systemctl enable docker
 
-echo "=== Get DB Password from Secret Manager ==="
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="n8n-db-secret" --project="idealist-426118" 2>/dev/null || echo "")
-if [ -z "$DB_PASSWORD" ]; then
-  echo "❌ ERROR: Failed to get DB_PASSWORD from Secret Manager!"
+echo "=== Get Secrets from Secret Manager ==="
+# Получаем секреты по именам, которые пробросил Terraform
+DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" 2>/dev/null)
+N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}" 2>/dev/null)
+CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}" 2>/dev/null)
+
+if [ -z "$DB_PASSWORD" ] || [ -z "$N8N_KEY" ] || [ -z "$CF_TOKEN" ]; then
+  echo "❌ ERROR: Failed to fetch one or more secrets from Secret Manager!"
   exit 1
 fi
 
@@ -84,11 +88,11 @@ services:
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=${db_host}
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=postgres
+      - DB_POSTGRESDB_PORT=${db_port}
+      - DB_POSTGRESDB_DATABASE=${db_name}
       - DB_POSTGRESDB_USER=${db_user}
-      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
-      - N8N_ENCRYPTION_KEY=${n8n_encryption_key}
+      - DB_POSTGRESDB_PASSWORD=\$${DB_PASSWORD}
+      - N8N_ENCRYPTION_KEY=\$${N8N_KEY}
       - EXECUTIONS_PROCESS=main
       - EXECUTIONS_MODE=regular
       - N8N_CONCURRENCY_PRODUCTION_LIMIT=1
@@ -98,7 +102,7 @@ services:
     restart: unless-stopped
     command: tunnel run
     environment:
-      - TUNNEL_TOKEN=${cf_tunnel_token}
+      - TUNNEL_TOKEN=\$${CF_TOKEN}
 EOF
 
 echo "=== Gentle Pulling (Saving CPU Credits) ==="
