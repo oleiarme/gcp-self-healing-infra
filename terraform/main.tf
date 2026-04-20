@@ -18,6 +18,19 @@ provider "google" {
   zone    = var.zone
 }
 
+resource "google_project_service" "required" {
+  for_each = toset([
+    "cloudresourcemanager.googleapis.com",
+    "compute.googleapis.com",
+    "secretmanager.googleapis.com",
+    "iam.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com"
+  ])
+
+  service = each.key
+}
+
 resource "google_service_account" "vm_sa" {
   account_id   = "n8n-app-sa"
   display_name = "n8n VM Service Account"
@@ -99,7 +112,7 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 5678
-    request_path = "/health/live"
+    request_path = "/healthz"
   }
 
   check_interval_sec  = 10
@@ -109,6 +122,11 @@ resource "google_compute_health_check" "hc" {
 }
 
 resource "google_compute_instance_template" "tpl" {
+  depends_on = [
+    google_secret_manager_secret.db_password,
+    google_secret_manager_secret.n8n_key,
+    google_secret_manager_secret.cf_token
+  ]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
 
@@ -145,7 +163,7 @@ resource "google_compute_instance_template" "tpl" {
   }
 
   lifecycle {
-    create_before_destroy = false
+    create_before_destroy = true
   }
 }
 
@@ -171,4 +189,20 @@ resource "google_compute_instance_group_manager" "mig" {
     max_unavailable_fixed = 1
     replacement_method    = "RECREATE"
   }
+}
+
+# Разрешаем виртуалке писать логи
+resource "google_project_iam_member" "log_writer" {
+  depends_on = [google_project_service.required]
+  project    = var.project_id
+  role       = "roles/logging.logWriter"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+# Разрешаем виртуалке писать метрики
+resource "google_project_iam_member" "metric_writer" {
+  depends_on = [google_project_service.required]
+  project    = var.project_id
+  role       = "roles/monitoring.metricWriter"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
 }
