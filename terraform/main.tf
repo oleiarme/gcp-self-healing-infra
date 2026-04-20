@@ -123,9 +123,9 @@ resource "google_compute_health_check" "hc" {
 
 resource "google_compute_instance_template" "tpl" {
   depends_on = [
-  google_secret_manager_secret.db_password,
-  google_secret_manager_secret.n8n_key,
-  google_secret_manager_secret.cf_token
+    google_secret_manager_secret.db_password,
+    google_secret_manager_secret.n8n_key,
+    google_secret_manager_secret.cf_token
   ]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
@@ -194,15 +194,15 @@ resource "google_compute_instance_group_manager" "mig" {
 # Разрешаем виртуалке писать логи
 resource "google_project_iam_member" "log_writer" {
   depends_on = [google_project_service.required]
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.vm_sa.email}"
+  project    = var.project_id
+  role       = "roles/logging.logWriter"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
 # Разрешаем виртуалке писать метрики
 resource "google_project_iam_member" "metric_writer" {
   depends_on = [google_project_service.required]
-  project = var.project_id
-  role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${google_service_account.vm_sa.email}"
+  project    = var.project_id
+  role       = "roles/monitoring.metricWriter"
+  member     = "serviceAccount:${google_service_account.vm_sa.email}"
 }
