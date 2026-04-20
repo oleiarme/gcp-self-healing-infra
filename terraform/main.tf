@@ -50,9 +50,15 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 5678
-    request_path = "/healthz"
-  }
+    request_path = "/health/live"
+    }
+
+    check_interval_sec  = 10
+    timeout_sec         = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 5
 }
+
 
 resource "google_compute_instance_template" "tpl" {
   # убрать depends_on = [null_resource.free_tier_enforcer]
@@ -86,9 +92,9 @@ resource "google_compute_instance_template" "tpl" {
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
       db_host            = var.db_host
       db_user            = var.db_user
-      DB_PASSWORD        = var.db_password
-      n8n_encryption_key = var.n8n_encryption_key
-      cf_tunnel_token    = var.CF_TUNNEL_TOKEN
+      DB_SECRET_NAME     = google_secret_manager_secret.db_password.secret_id
+      N8N_KEY_SECRET_NAME     = google_secret_manager_secret.n8n_key.secret_id
+      CF_TUNNEL_SECRET_NAME   = google_secret_manager_secret.cf_token.secret_id
       db_name            = "postgres"
       db_port            = "5432"
     })
@@ -111,7 +117,7 @@ resource "google_compute_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 1500
+    initial_delay_sec = 1200
   }
 
   update_policy {
