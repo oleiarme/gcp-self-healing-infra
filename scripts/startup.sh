@@ -63,15 +63,24 @@ retry systemctl restart docker
 systemctl enable docker
 
 echo "=== Get Secrets from Secret Manager ==="
-# Получаем секреты по именам, которые пробросил Terraform
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" 2>/dev/null)
-N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}" 2>/dev/null)
-CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}" 2>/dev/null)
 
-if [ -z "$DB_PASSWORD" ] || [ -z "$N8N_KEY" ] || [ -z "$CF_TOKEN" ]; then
-  echo "❌ ERROR: Failed to fetch one or more secrets from Secret Manager!"
-  exit 1
-fi
+# Убран 2>/dev/null, чтобы реальная причина (IAM, API downtime) попала в системный лог
+DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || { 
+  echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"; 
+  exit 1; 
+}
+
+N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || { 
+  echo "❌ CRITICAL: Failed to fetch N8N_KEY"; 
+  exit 1; 
+}
+
+CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || { 
+  echo "❌ CRITICAL: Failed to fetch CF_TOKEN"; 
+  exit 1; 
+}
+
+echo "✅ All secrets fetched successfully."
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
