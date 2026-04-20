@@ -106,10 +106,14 @@ services:
 EOF
 
 echo "=== Gentle Pulling (Saving CPU Credits) ==="
-docker compose pull n8n
-sleep 120
-docker compose pull cloudflared
-sleep 60
+
+# Если после всех retry pull падает -> жестко убиваем скрипт. MIG пересоздаст машину.
+retry timeout 180 docker compose pull n8n || { echo "❌ Critical: n8n pull failed"; exit 1; }
+
+# Короткий отдых для CPU
+sleep 10 
+
+retry timeout 120 docker compose pull cloudflared || { echo "❌ Critical: cloudflared pull failed"; exit 1; }
 
 echo "=== Starting Containers ==="
 docker compose up -d
