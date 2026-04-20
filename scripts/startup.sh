@@ -86,23 +86,26 @@ services:
     ports:
       - "5678:5678"
     environment:
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=${db_host}
-      - DB_POSTGRESDB_PORT=${db_port}
-      - DB_POSTGRESDB_DATABASE=${db_name}
-      - DB_POSTGRESDB_USER=${db_user}
-      - DB_POSTGRESDB_PASSWORD=\$${DB_PASSWORD}
-      - N8N_ENCRYPTION_KEY=\$${N8N_KEY}
-      - EXECUTIONS_PROCESS=main
-      - EXECUTIONS_MODE=regular
-      - N8N_CONCURRENCY_PRODUCTION_LIMIT=1
+      # ... (ваши переменные окружения) ...
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s # КРИТИЧНО: Даем время на накатывание миграций БД при первом старте
 
   cloudflared:
-    image: cloudflare/cloudflared:2024.3.0
+    image: cloudflare/cloudflared:2026.3.0
     restart: unless-stopped
-    command: tunnel run
+    # Включаем сервер метрик на порту 2000 для healthcheck
+    command: tunnel --metrics 0.0.0.0:2000 run
     environment:
       - TUNNEL_TOKEN=\$${CF_TOKEN}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2000/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 EOF
 
 echo "=== Gentle Pulling (Saving CPU Credits) ==="
@@ -131,10 +134,23 @@ for i in {1..30}; do
   sleep 5
 done
 
+echo "=== Docker Containers Status ==="
+docker compose ps
+
+# Если нужно, можно вывести логи неудачных контейнеров
+FAILED_CONTAINERS=$(docker compose ps -q --filter "health=unhealthy")
+if [ ! -z "$FAILED_CONTAINERS" ]; then
+  echo "❌ Unhealthy containers detected!"
+  docker compose logs
+  exit 1
+fi
+
 # Если цикл закончился, а n8n так и не ожил
 echo "❌ CRITICAL: n8n failed to start within timeout"
 echo "=== Dumping Docker Logs ==="
 docker compose logs --tail=100
 exit 1
+
+
 
 echo "=== Startup complete ==="
