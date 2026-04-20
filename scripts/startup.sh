@@ -63,7 +63,7 @@ retry systemctl restart docker
 systemctl enable docker
 
 echo "=== Get DB Password from Secret Manager ==="
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="n8n-db-secret" --project="idealist-426118" 2>/dev/null || echo "")
+DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" 2>/dev/null)
 if [ -z "$DB_PASSWORD" ]; then
   echo "❌ ERROR: Failed to get DB_PASSWORD from Secret Manager!"
   exit 1
