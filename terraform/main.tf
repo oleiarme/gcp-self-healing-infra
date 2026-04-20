@@ -85,7 +85,9 @@ resource "google_compute_instance_template" "tpl" {
 
   service_account {
     email  = google_service_account.vm_sa.email
-    scopes = ["cloud-platform"]
+    scopes = [
+    "https://www.googleapis.com/auth/cloud-platform.read-only"
+    ]
   }
 
   metadata = {
