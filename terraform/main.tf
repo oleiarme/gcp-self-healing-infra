@@ -191,18 +191,4 @@ resource "google_compute_instance_group_manager" "mig" {
   }
 }
 
-# Разрешаем виртуалке писать логи
-resource "google_project_iam_member" "log_writer" {
-  depends_on = [google_project_service.required]
-  project    = var.project_id
-  role       = "roles/logging.logWriter"
-  member     = "serviceAccount:${google_service_account.vm_sa.email}"
-}
 
-# Разрешаем виртуалке писать метрики
-resource "google_project_iam_member" "metric_writer" {
-  depends_on = [google_project_service.required]
-  project    = var.project_id
-  role       = "roles/monitoring.metricWriter"
-  member     = "serviceAccount:${google_service_account.vm_sa.email}"
-}
