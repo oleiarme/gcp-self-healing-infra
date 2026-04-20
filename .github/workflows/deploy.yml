@@ -2,7 +2,7 @@ name: Deploy n8n Infrastructure
 
 on:
   push:
-    branches: [ main, dev1 ]
+    branches: [ main ]
 
 # КРИТИЧЕСКИЙ ФИКС: Ограничение параллельных запусков
 concurrency:
