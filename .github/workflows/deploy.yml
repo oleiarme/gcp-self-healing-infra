@@ -1,0 +1,87 @@
+name: terraform-deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform # Все команды будут выполняться здесь
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA }}
+          
+      - name: Hardcore Pre-deployment Cleanup
+        run: |
+          echo "🚀 Starting Bunker-Level Cleanup..."
+          
+          # 1. Жесткое удаление MIG с ожиданием
+          if gcloud compute instance-groups managed describe n8n-mig --zone=us-central1-a > /dev/null 2>&1; then
+            echo "⚠️ MIG found. Initiating delete..."
+            until gcloud compute instance-groups managed delete n8n-mig --zone=us-central1-a --quiet 2>/dev/null; do              echo "MIG is busy, retrying in 10 seconds..."
+              sleep 10
+              done
+            echo "✅ MIG deleted successfully."
+            
+            echo "⏳ Waiting for MIG and VMs to fully disappear..."
+            for i in {1..20}; do
+              if ! gcloud compute instance-groups managed describe n8n-mig --zone=us-central1-a > /dev/null 2>&1; then
+                echo "✅ MIG is gone!"
+                break
+              fi
+              echo "...still waiting ($i/20)..."
+              sleep 10
+            done
+          fi
+
+          # 2. Тотальная зачистка дисков-сирот
+          # Мы ищем ВСЕ диски, которые не привязаны к машинам (orphaned)
+          echo "🔍 Searching for orphaned disks..."
+          ORPHAN_LIST=$(gcloud compute disks list --filter="-users:*" --format="value(name)")
+          
+          if [ ! -z "$ORPHAN_LIST" ]; then
+            for DISK in $OR_LIST; do
+              echo "🚫 Deleting orphaned disk: $DISK"
+              gcloud compute disks delete $DISK --zone=us-central1-a --quiet || true
+            done
+          else
+            echo "✅ No orphaned disks found."
+          fi
+
+          # 3. Удаляем Health Check (он часто мешает пересозданию)
+          if gcloud compute health-checks describe n8n-health-check --global > /dev/null 2>&1; then
+            gcloud compute health-checks delete n8n-health-check --global --quiet
+          fi
+          
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET }}" \
+            -backend-config="prefix=terraform/state"
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        env:
+          TF_VAR_CF_TUNNEL_TOKEN: ${{ secrets.TF_VAR_CF_TUNNEL_TOKEN }}
+          TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+          TF_VAR_n8n_encryption_key: ${{ secrets.TF_VAR_n8n_encryption_key }}
+          TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
+          TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
+          TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
