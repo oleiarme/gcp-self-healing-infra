@@ -1,11 +1,8 @@
 terraform {
   required_version = ">= 1.0"
 
-  backend "gcs" {
-    bucket = "terraform-state-idealist426118"
-    prefix = "n8n/state"
-  }
-
+  # Backend настраивается через -backend-config=backend.conf
+  backend "gcs" {}
 
   required_providers {
     google = {
@@ -118,7 +115,7 @@ resource "google_compute_instance_group_manager" "mig" {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     max_surge_fixed       = 0
-    max_unavailable_fixed = 1 # Kill old instance first, then create new one
+    max_unavailable_fixed = 1
     replacement_method    = "RECREATE"
   }
 }
@@ -132,37 +129,28 @@ resource "null_resource" "free_tier_enforcer" {
     command = <<EOT
       set -e
       ZONE="us-central1-a"
-      PROJECT_ID="${var.project_id}"
-      SA_NAME="n8n-vm-sa"
-      SECRET_NAME="db-password"
 
-      echo "🛡 Running Hardened Infrastructure Check..."
-
-      # 1. Проверка Service Account
-      if gcloud iam service-accounts describe "$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" --project="$PROJECT_ID" >/dev/null 2>&1; then
-        echo "⚠️  Service Account $SA_NAME already exists."
-        # Если мы хотим, чтобы Terraform создал его заново, его нужно удалить здесь:
-        # gcloud iam service-accounts delete "$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" --quiet
-      fi
-
-      # 2. Проверка Secret Manager
-      if gcloud secrets describe "$SECRET_NAME" --project="$PROJECT_ID" >/dev/null 2>&1; then
-        echo "⚠️  Secret $SECRET_NAME already exists."
-      fi
-
-      # 3. Твоя существующая чистка дисков
-      echo "🧹 Cleaning orphaned disks..."
+      echo "🛡 Running Hardened Free Tier Check..."
       ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
       for disk in $ORPHAN_DISKS; do
         echo "🗑 Deleting disk: $disk"
         gcloud compute disks delete "$disk" --zone="$ZONE" --quiet
       done
 
-      # 4. Проверка лимитов Free Tier
       DISK_COUNT=$(gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | wc -l)
+      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc -l)
+
+      echo "📊 Stats after cleanup: $VM_COUNT VMs, $DISK_COUNT Disks"
+
       if [ "$DISK_COUNT" -gt 1 ]; then
-         echo "❌ Too many disks for Free Tier. Exiting to prevent costs."
-         exit 1
+        echo "⚠️ WARNING: Multiple disks detected ($DISK_COUNT)."
+        if [ "$VM_COUNT" -eq 0 ]; then
+          echo "🧨 Emergency cleaning of stuck boot disks..."
+          gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
+        else
+          echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
+          exit 1
+        fi
       fi
     EOT
   }
