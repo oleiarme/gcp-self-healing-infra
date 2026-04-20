@@ -55,9 +55,12 @@ resource "google_compute_health_check" "hc" {
 }
 
 resource "google_compute_instance_template" "tpl" {
-  depends_on   = [null_resource.free_tier_enforcer]
-  name_prefix  = "n8n-"
-  machine_type = "e2-micro"
+  # убрать depends_on = [null_resource.free_tier_enforcer]
+  lifecycle {
+    create_before_destroy = false
+    replace_triggered_by  = [google_compute_instance_template.tpl]
+  }
+}
 
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
@@ -120,38 +123,4 @@ resource "google_compute_instance_group_manager" "mig" {
   }
 }
 
-resource "null_resource" "free_tier_enforcer" {
-  triggers = {
-    always_run = timestamp()
-  }
 
-  provisioner "local-exec" {
-    command = <<EOT
-      set -e
-      ZONE="us-central1-a"
-
-      echo "🛡 Running Hardened Free Tier Check..."
-      ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
-      for disk in $ORPHAN_DISKS; do
-        echo "🗑 Deleting disk: $disk"
-        gcloud compute disks delete "$disk" --zone="$ZONE" --quiet
-      done
-
-      DISK_COUNT=$(gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | wc -l)
-      VM_COUNT=$(gcloud compute instances list --filter="status=RUNNING AND zone:($ZONE)" --format="value(name)" | wc -l)
-
-      echo "📊 Stats after cleanup: $VM_COUNT VMs, $DISK_COUNT Disks"
-
-      if [ "$DISK_COUNT" -gt 1 ]; then
-        echo "⚠️ WARNING: Multiple disks detected ($DISK_COUNT)."
-        if [ "$VM_COUNT" -eq 0 ]; then
-          echo "🧨 Emergency cleaning of stuck boot disks..."
-          gcloud compute disks list --filter="zone:($ZONE)" --format="value(name)" | xargs -I {} gcloud compute disks delete {} --zone="$ZONE" --quiet
-        else
-          echo "❌ Critical Error: Too many resources for Free Tier. Manual intervention required."
-          exit 1
-        fi
-      fi
-    EOT
-  }
-}
