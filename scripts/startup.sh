@@ -68,6 +68,8 @@ if [ -z "$DB_PASSWORD" ]; then
   echo "❌ ERROR: Failed to get DB_PASSWORD from Secret Manager!"
   exit 1
 fi
+n8n_encryption_key=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}" 2>/dev/null)
+cf_tunnel_token=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}" 2>/dev/null)
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
