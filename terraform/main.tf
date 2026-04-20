@@ -17,11 +17,11 @@ provider "google" {
 }
 
 resource "google_service_account" "vm_sa" {
-  account_id = "n8n-vm-sa"
+  account_id = "n8n-app-sa"
 }
 
 resource "google_secret_manager_secret" "db_password" {
-  secret_id = "db-password"
+  secret_id = "n8n-db-secret"
   replication {
     user_managed {
       replicas {
