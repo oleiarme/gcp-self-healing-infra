@@ -1,11 +1,16 @@
 terraform {
   required_version = ">= 1.0"
 
+  backend "gcs" {
+  bucket = "terraform-state-idealist426118"
+  prefix = "n8n/state"
+}
+
 
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 4.0"
+      version = "~> 6.0"
     }
   }
 }
@@ -18,6 +23,7 @@ provider "google" {
 
 resource "google_service_account" "vm_sa" {
   account_id = "n8n-app-sa"
+  display_name = "n8n VM Service Account" 
 }
 
 resource "google_secret_manager_secret" "db_password" {
