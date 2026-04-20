@@ -49,12 +49,12 @@ mkdir -p /etc/systemd/system/containerd.service.d
 
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
-CPUQuota=25%
+CPUQuota=70%
 EOF
 
 cat <<EOF > /etc/systemd/system/containerd.service.d/throttle.conf
 [Service]
-CPUQuota=25%
+CPUQuota=70%
 EOF
 
 sysctl -w vm.swappiness=10
