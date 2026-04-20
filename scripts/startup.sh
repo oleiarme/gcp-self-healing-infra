@@ -118,4 +118,23 @@ retry timeout 120 docker compose pull cloudflared || { echo "❌ Critical: cloud
 echo "=== Starting Containers ==="
 docker compose up -d
 
+echo "=== Verifying n8n startup ==="
+
+# Флаг -f заставит curl вернуть ошибку, если n8n отдаст HTTP 500/503
+for i in {1..30}; do
+  if curl -sf http://localhost:5678/healthz >/dev/null; then
+    echo "✅ n8n is up and healthy"
+    # Сигнализируем успешный старт
+    exit 0
+  fi
+  echo "⏳ Waiting for n8n to initialize ($i/30)..."
+  sleep 5
+done
+
+# Если цикл закончился, а n8n так и не ожил
+echo "❌ CRITICAL: n8n failed to start within timeout"
+echo "=== Dumping Docker Logs ==="
+docker compose logs --tail=100
+exit 1
+
 echo "=== Startup complete ==="
