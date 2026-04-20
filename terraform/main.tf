@@ -99,7 +99,7 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 5678
-    request_path = "/healthz"
+    request_path = "/health/live"
   }
 
   check_interval_sec  = 10
