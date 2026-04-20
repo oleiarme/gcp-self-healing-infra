@@ -7,7 +7,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 4.0"
+      version = "~> 6.0"
     }
   }
 }
@@ -19,11 +19,12 @@ provider "google" {
 }
 
 resource "google_service_account" "vm_sa" {
-  account_id = "n8n-vm-sa"
+  account_id   = "n8n-app-sa"
+  display_name = "n8n VM Service Account"
 }
 
 resource "google_secret_manager_secret" "db_password" {
-  secret_id = "db-password"
+  secret_id = "n8n-db-secret"
   replication {
     user_managed {
       replicas {
@@ -132,7 +133,7 @@ resource "null_resource" "free_tier_enforcer" {
       echo "🛡 Running Hardened Free Tier Check..."
       ORPHAN_DISKS=$(gcloud compute disks list --filter="zone:($ZONE) AND -users:*" --format="value(name)")
       for disk in $ORPHAN_DISKS; do
-        echo "🧹 Deleting truly orphaned disk: $disk"
+        echo "🗑 Deleting disk: $disk"
         gcloud compute disks delete "$disk" --zone="$ZONE" --quiet
       done
 
