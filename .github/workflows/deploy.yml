@@ -1,9 +1,14 @@
-name: terraform-deploy
+name: Deploy n8n Infrastructure
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main, dev1 ]
+
+# КРИТИЧЕСКИЙ ФИКС: Ограничение параллельных запусков
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 
 jobs:
   terraform:
