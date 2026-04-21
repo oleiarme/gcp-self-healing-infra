@@ -82,9 +82,14 @@ CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NA
 
 echo "✅ All secrets fetched successfully."
 
+export CF_TOKEN
+export N8N_KEY
+export DB_PASSWORD
+
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
 cd /opt/n8n
+
 
 cat <<EOF > docker-compose.yml
 version: '3.8'
@@ -118,13 +123,15 @@ services:
     # Включаем сервер метрик на порту 2000 для healthcheck
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
-      - TUNNEL_TOKEN=\$${CF_TOKEN}
+      TUNNEL_TOKEN: ${CF_TOKEN}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:2000/ready"]
       interval: 30s
       timeout: 5s
       retries: 3
 EOF
+
+docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Gentle Pulling (Saving CPU Credits) ==="
 
