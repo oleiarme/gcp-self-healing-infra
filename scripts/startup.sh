@@ -105,8 +105,9 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: postgres
       DB_POSTGRESDB_USER: ${db_user}
-      DB_POSTGRESDB_PASSWORD: ${DB_PASSWORD}
-      N8N_ENCRYPTION_KEY: ${n8n_encryption_key}
+      DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
+      
+      N8N_ENCRYPTION_KEY: $N8N_KEY
       EXECUTIONS_PROCESS=main
       EXECUTIONS_MODE=regular
       N8N_CONCURRENCY_PRODUCTION_LIMIT=1
@@ -123,7 +124,7 @@ services:
     # Включаем сервер метрик на порту 2000 для healthcheck
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
-      TUNNEL_TOKEN: ${CF_TOKEN}
+      TUNNEL_TOKEN: $CF_TOKEN
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:2000/ready"]
       interval: 30s
