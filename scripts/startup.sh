@@ -114,6 +114,11 @@ services:
       EXECUTIONS_PROCESS: main
       EXECUTIONS_MODE: regular
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
+      N8N_LOG_LEVEL: error
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_PRUNE: true
+      EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
       interval: 60s
