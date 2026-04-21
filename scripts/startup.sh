@@ -108,9 +108,9 @@ services:
       DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
       
       N8N_ENCRYPTION_KEY: $N8N_KEY
-      EXECUTIONS_PROCESS=main
-      EXECUTIONS_MODE=regular
-      N8N_CONCURRENCY_PRODUCTION_LIMIT=1
+      EXECUTIONS_PROCESS:main
+      EXECUTIONS_MODE: regular
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
       interval: 30s
