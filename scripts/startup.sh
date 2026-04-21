@@ -23,7 +23,6 @@ echo "=== Install Docker ==="
 retry apt-get update
 retry apt-get install -y ca-certificates curl gnupg docker.io
 
-# Установка docker compose v2 plugin
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
@@ -31,7 +30,6 @@ chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 echo "=== Taming Docker for e2-micro ==="
 mkdir -p /etc/docker
-# ЕДИНСТВЕННАЯ запись daemon.json — не перезаписывать ниже!
 cat <<EOF > /etc/docker/daemon.json
 {
   "max-concurrent-downloads": 1,
@@ -63,8 +61,6 @@ retry systemctl restart docker
 systemctl enable docker
 
 echo "=== Get Secrets from Secret Manager ==="
-
-# Убран 2>/dev/null, чтобы реальная причина (IAM, API downtime) попала в системный лог
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || { 
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"; 
   exit 1; 
@@ -90,7 +86,6 @@ echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
 cd /opt/n8n
 
-
 cat <<EOF > docker-compose.yml
 version: '3.8'
 services:
@@ -105,9 +100,8 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: postgres
       DB_POSTGRESDB_USER: ${db_user}
-      DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
-      
-      N8N_ENCRYPTION_KEY: $N8N_KEY
+      DB_POSTGRESDB_PASSWORD: \$DB_PASSWORD
+      N8N_ENCRYPTION_KEY: \$N8N_KEY
       EXECUTIONS_PROCESS: main
       EXECUTIONS_MODE: regular
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
@@ -116,15 +110,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s # КРИТИЧНО: Даем время на накатывание миграций БД при первом старте
+      start_period: 60s
 
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
     restart: unless-stopped
-    # Включаем сервер метрик на порту 2000 для healthcheck
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
-      TUNNEL_TOKEN: $CF_TOKEN
+      TUNNEL_TOKEN: \$CF_TOKEN
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:2000/ready"]
       interval: 30s
@@ -135,16 +128,10 @@ EOF
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Pulling containers (Optimized for e2-micro IO) ==="
-
-# Пытаемся стянуть всё разом. Благодаря max-concurrent-downloads=1 в daemon.json, 
-# слои будут качаться и распаковываться строго по очереди, не убивая диск.
 retry timeout 300 docker compose pull || {
   echo "⚠️ compose pull failed (network/throttle), initiating fallback to direct pull..."
-  
-  # Очищаем кэш оборванных слоев, чтобы они не мешали фоллбеку
   docker system prune -f --volumes
 
-  # Тянем образы напрямую, жестко контролируя каждый шаг
   retry timeout 300 docker pull docker.n8n.io/n8nio/n8n:2.16.1 || { 
     echo "❌ CRITICAL: Fallback n8n pull failed"; 
     exit 1; 
@@ -160,13 +147,12 @@ echo "=== Starting Containers ==="
 docker compose up -d
 
 echo "=== Verifying n8n startup ==="
-
-# Флаг -f заставит curl вернуть ошибку, если n8n отдаст HTTP 500/503
+HEALTHY=false
 for i in {1..30}; do
   if curl -sf http://localhost:5678/healthz >/dev/null; then
     echo "✅ n8n is up and healthy"
-    # Сигнализируем успешный старт
-    exit 0
+    HEALTHY=true
+    break # Выходим из цикла, но продолжаем скрипт!
   fi
   echo "⏳ Waiting for n8n to initialize ($i/30)..."
   sleep 5
@@ -175,7 +161,6 @@ done
 echo "=== Docker Containers Status ==="
 docker compose ps
 
-# Если нужно, можно вывести логи неудачных контейнеров
 FAILED_CONTAINERS=$(docker compose ps -q --filter "health=unhealthy")
 if [ ! -z "$FAILED_CONTAINERS" ]; then
   echo "❌ Unhealthy containers detected!"
@@ -183,12 +168,12 @@ if [ ! -z "$FAILED_CONTAINERS" ]; then
   exit 1
 fi
 
-# Если цикл закончился, а n8n так и не ожил
-echo "❌ CRITICAL: n8n failed to start within timeout"
-echo "=== Dumping Docker Logs ==="
-docker compose logs --tail=100
-exit 1
-
-
-
-echo "=== Startup complete ==="
+if [ "$HEALTHY" = true ]; then
+  echo "=== Startup complete ==="
+  exit 0
+else
+  echo "❌ CRITICAL: n8n failed to start within timeout"
+  echo "=== Dumping Docker Logs ==="
+  docker compose logs --tail=100
+  exit 1
+fi
