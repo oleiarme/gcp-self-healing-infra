@@ -1,10 +1,46 @@
-variable "project_id" {}
-variable "region" { default = "us-central1" }
-variable "zone" { default = "us-central1-a" }
+variable "project_id" {
+  description = "GCP project ID"
+  type        = string
+}
 
-variable "db_host" {}
-variable "db_user" {}
-variable "db_password" { sensitive = true }
-variable "n8n_encryption_key" { sensitive = true }
+variable "region" {
+  description = "GCP region for resources"
+  type        = string
+  default     = "us-central1"
+}
 
-variable "CF_TUNNEL_TOKEN" { sensitive = true }
+variable "zone" {
+  description = "GCP zone for MIG (us-central1-a for Free Tier e2-micro)"
+  type        = string
+  default     = "us-central1-a"
+}
+
+variable "db_host" {
+  description = "Cloud SQL private IP address"
+  type        = string
+  sensitive   = false
+}
+
+variable "db_user" {
+  description = "PostgreSQL username for n8n"
+  type        = string
+  sensitive   = false
+}
+
+variable "db_password" {
+  description = "PostgreSQL password — stored in Secret Manager, not used directly"
+  type        = string
+  sensitive   = true
+}
+
+variable "n8n_encryption_key" {
+  description = "n8n encryption key (32+ random chars) — stored in Secret Manager"
+  type        = string
+  sensitive   = true
+}
+
+variable "CF_TUNNEL_TOKEN" {
+  description = "Cloudflare Tunnel token — stored in Secret Manager"
+  type        = string
+  sensitive   = true
+}

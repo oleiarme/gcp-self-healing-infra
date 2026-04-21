@@ -42,10 +42,10 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 
 ## How Self-Healing Works
 
-1. Health check polls `http://VM:5678/healthz` every 30s
+1. Health check polls `http://VM:5678/healthz` every **10s** (GCP check_interval_sec)
 2. If n8n stops responding → MIG automatically **replaces the VM**
 3. New VM runs `startup.sh` → installs Docker → pulls n8n → starts containers
-4. Total recovery time: ~5–7 minutes
+4. Total recovery time: ~5–10 minutes (see SLO below)
 5. Zero manual intervention required
 
 ## Stack
@@ -144,6 +144,27 @@ If MIG recreates VM more than ~3 times/month → investigate root cause (see [Ru
 - Cloudflare Tunnel availability
 - Network partition between VM and database
 
+## Outputs
+
+After `terraform apply`, get key resource names for debugging and alerting:
+
+```bash
+terraform output -json | jq '{
+  mig_name,
+  health_check_name,
+  vm_service_account_email,
+  secret_names
+}'
+```
+
+| Output | Use case |
+|--------|----------|
+| `mig_name` | Identify MIG in GCP Console |
+| `health_check_name` | Set up Cloud Monitoring alerting |
+| `vm_service_account_email` | Filter logs by service account |
+| `secret_names` | Quick reference for rotation script (Scenario 3 in Runbook) |
+| `deployment_timestamp` | Correlate changes across environments |
+
 ## Runbook
 
 For incident response procedures see [Runbook.md](Runbook.md):
@@ -165,6 +186,7 @@ For incident response procedures see [Runbook.md](Runbook.md):
 ├── terraform/
 │   ├── main.tf # Core infrastructure
 │   ├── variables.tf # Input variables
+│   ├── outputs.tf # Terraform outputs for debugging/alerting
 │   └── terraform.tfvars.example # Config template
 ├── Runbook.md # Incident response procedures
 └── README.md
