@@ -179,7 +179,7 @@ resource "google_compute_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 1200 # Оптимизировано с 1500
+    initial_delay_sec = 1300 # Оптимизировано с 1500
   }
 
   update_policy {
