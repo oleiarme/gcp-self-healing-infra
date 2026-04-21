@@ -95,13 +95,13 @@ services:
     ports:
       - "5678:5678"
     environment:
-      DB_TYPE=postgresdb
-      DB_POSTGRESDB_HOST=${db_host}
-      DB_POSTGRESDB_PORT=5432
-      DB_POSTGRESDB_DATABASE=postgres
-      DB_POSTGRESDB_USER=${db_user}
-      DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
-      N8N_ENCRYPTION_KEY=${n8n_encryption_key}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: ${db_host}
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: postgres
+      DB_POSTGRESDB_USER: ${db_user}
+      DB_POSTGRESDB_PASSWORD: ${DB_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${n8n_encryption_key}
       EXECUTIONS_PROCESS=main
       EXECUTIONS_MODE=regular
       N8N_CONCURRENCY_PRODUCTION_LIMIT=1
