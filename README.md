@@ -144,6 +144,14 @@ If MIG recreates VM more than ~3 times/month → investigate root cause (see [Ru
 - Cloudflare Tunnel availability
 - Network partition between VM and database
 
+## Runbook
+
+For incident response procedures see [Runbook.md](Runbook.md):
+- **Scenario 1:** MIG recreated VM (health check failed)
+- **Scenario 2:** Startup timeout / boot-loop
+- **Scenario 3:** Secret rotation (DB password, n8n key, Cloudflare token)
+- **Scenario 4:** MIG update / terraform redeploy
+
 ## Project Structure
 
 ```
@@ -155,8 +163,9 @@ If MIG recreates VM more than ~3 times/month → investigate root cause (see [Ru
 ├── scripts/
 │   └── startup.sh            # VM bootstrap script
 ├── terraform/
-│   ├── main.tf               # Core infrastructure
-│   ├── variables.tf          # Input variables
-│   └── terraform.tfvars.example  # Config template
+│   ├── main.tf # Core infrastructure
+│   ├── variables.tf # Input variables
+│   └── terraform.tfvars.example # Config template
+├── Runbook.md # Incident response procedures
 └── README.md
 ```
