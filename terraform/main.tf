@@ -177,9 +177,13 @@ resource "google_compute_instance_group_manager" "mig" {
     instance_template = google_compute_instance_template.tpl.id
   }
 
-  auto_healing_policies {
-    health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 2400 # chamge because sometimes update takes time
+ auto_healing_policies {
+    health_check = google_compute_health_check.hc.id
+    # 60s — enough for n8n to pass its 420s start_period in Docker.
+    # GCP health check starts probing immediately after initial_delay.
+    # If health check fails 5x (50s at 10s interval) → MIG replaces VM.
+    # Total detection-to-replacement: ~50s + ~5min startup = ~6min recovery.
+    initial_delay_sec = 60
   }
 
   update_policy {

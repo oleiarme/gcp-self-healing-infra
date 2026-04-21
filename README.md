@@ -127,6 +127,23 @@ Push to `main` → CI/CD deploys automatically.
 - **Network**: STANDARD tier
 - Built-in guard checks disk/VM count before every apply
 
+## SLO / SLI
+
+| Metric | Target | How measured |
+|--------|--------|--------------|
+| **Availability** | 99.5% / month | GCP health check: 2 successes → healthy, 5 failures → unhealthy |
+| **Recovery time** | < 10 min | MIG detects failure → replaces VM → startup.sh completes |
+| **Health check interval** | 10s | GCP polls `/healthz` every 10s with 5s timeout |
+| **Startup grace period** | 420s | Docker `start_period` before n8n reports healthy/unhealthy |
+
+**Error budget:** 3.6h downtime/month (0.5%) is acceptable.
+If MIG recreates VM more than ~3 times/month → investigate root cause (see [Runbook](Runbook.md)).
+
+**What this does NOT cover:**
+- Cloud SQL availability (managed by GCP, separate SLA)
+- Cloudflare Tunnel availability
+- Network partition between VM and database
+
 ## Project Structure
 
 ```
