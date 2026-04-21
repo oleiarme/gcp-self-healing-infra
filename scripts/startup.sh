@@ -124,12 +124,7 @@ services:
     restart: unless-stopped
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
-      TUNNEL_TOKEN: \$CF_TOKEN
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:2000/ready"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      TUNNEL_TOKEN: \$CF_TOKEN    
 EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
@@ -168,7 +163,7 @@ done
 echo "=== Docker Containers Status ==="
 docker compose ps
 
-FAILED_CONTAINERS=$(docker compose ps -q --filter "health=unhealthy")
+FAILED_CONTAINERS=$(docker ps -q --filter "health=unhealthy")
 if [ ! -z "$FAILED_CONTAINERS" ]; then
   echo "❌ Unhealthy containers detected!"
   docker compose logs
