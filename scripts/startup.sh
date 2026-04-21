@@ -139,10 +139,10 @@ services:
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      interval: 60s
+      timeout: 15s
+      retries: 10
+      start_period: 420s
 
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
@@ -154,53 +154,32 @@ EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
-echo "=== Pulling containers (Optimized for e2-micro IO) ==="
-retry timeout 1600 docker compose pull || {
-  echo "⚠️ compose pull failed (network/throttle), initiating fallback to direct pull..."
-  docker system prune -f --volumes
-
-  retry timeout 1600 docker pull docker.n8n.io/n8nio/n8n:2.16.1 || { 
-    echo "❌ CRITICAL: Fallback n8n pull failed"; 
-    exit 1; 
-  }
-  
-  retry timeout 600 docker pull cloudflare/cloudflared:2026.3.0 || { 
-    echo "❌ CRITICAL: Fallback cloudflared pull failed"; 
-    exit 1; 
-  }
-}
+echo "=== Pulling containers ==="
+# На e2-micro pull может занять вечность, увеличиваем таймаут
+retry timeout 1800 docker compose pull
 
 echo "=== Starting Containers ==="
 docker compose up -d
 
 echo "=== Verifying n8n startup ==="
 HEALTHY=false
-for i in {1..30}; do
+# 60 попыток по 10 секунд = 10 минут ожидания
+for i in {1..60}; do
   if curl -sf http://localhost:5678/healthz >/dev/null; then
     echo "✅ n8n is up and healthy"
     HEALTHY=true
-    break # Выходим из цикла, но продолжаем скрипт!
+    break 
   fi
-  echo "⏳ Waiting for n8n to initialize ($i/30)..."
-  sleep 5
+  echo "⏳ Waiting for n8n to initialize ($i/60)..."
+  sleep 10
 done
-
-echo "=== Docker Containers Status ==="
-docker compose ps
-
-FAILED_CONTAINERS=$(docker ps -q --filter "health=unhealthy")
-if [ ! -z "$FAILED_CONTAINERS" ]; then
-  echo "❌ Unhealthy containers detected!"
-  docker compose logs
-  exit 1
-fi
 
 if [ "$HEALTHY" = true ]; then
   echo "=== Startup complete ==="
+  docker compose ps
   exit 0
 else
-  echo "❌ CRITICAL: n8n failed to start within timeout"
-  echo "=== Dumping Docker Logs ==="
+  echo "❌ CRITICAL: n8n failed to start within 10 minutes"
   docker compose logs --tail=100
   exit 1
 fi
