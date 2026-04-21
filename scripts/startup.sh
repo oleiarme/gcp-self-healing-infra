@@ -134,15 +134,27 @@ EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
-echo "=== Gentle Pulling (Saving CPU Credits) ==="
+echo "=== Pulling containers (Optimized for e2-micro IO) ==="
 
-# Если после всех retry pull падает -> жестко убиваем скрипт. MIG пересоздаст машину.
-retry timeout 180 docker compose pull n8n || { echo "❌ Critical: n8n pull failed"; exit 1; }
+# Пытаемся стянуть всё разом. Благодаря max-concurrent-downloads=1 в daemon.json, 
+# слои будут качаться и распаковываться строго по очереди, не убивая диск.
+retry timeout 300 docker compose pull || {
+  echo "⚠️ compose pull failed (network/throttle), initiating fallback to direct pull..."
+  
+  # Очищаем кэш оборванных слоев, чтобы они не мешали фоллбеку
+  docker system prune -f --volumes
 
-# Короткий отдых для CPU
-sleep 10 
-
-retry timeout 120 docker compose pull cloudflared || { echo "❌ Critical: cloudflared pull failed"; exit 1; }
+  # Тянем образы напрямую, жестко контролируя каждый шаг
+  retry timeout 300 docker pull docker.n8n.io/n8nio/n8n:2.16.1 || { 
+    echo "❌ CRITICAL: Fallback n8n pull failed"; 
+    exit 1; 
+  }
+  
+  retry timeout 180 docker pull cloudflare/cloudflared:2026.3.0 || { 
+    echo "❌ CRITICAL: Fallback cloudflared pull failed"; 
+    exit 1; 
+  }
+}
 
 echo "=== Starting Containers ==="
 docker compose up -d
