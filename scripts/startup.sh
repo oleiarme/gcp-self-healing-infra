@@ -67,6 +67,31 @@ retry systemctl restart docker
 systemctl enable docker
 systemctl enable containerd
 
+echo "=== Installing GCP Ops Agent (Metrics Only) ==="
+curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+bash add-google-cloud-ops-agent-repo.sh --also-install
+
+cat <<EOF > /etc/google-cloud-ops-agent/config.yaml
+logging:
+  receivers: {}
+  service:
+    pipelines: {}
+metrics:
+  receivers:
+    hostmetrics:
+      type: hostmetrics
+      collection_interval: 60s
+  service:
+    pipelines:
+      default_pipeline:
+        receivers: [hostmetrics]
+EOF
+
+systemctl restart google-cloud-ops-agent
+# =========================================
+
+echo "=== Get Secrets from Secret Manager ==="
+
 echo "=== Get Secrets from Secret Manager ==="
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || { 
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"; 
