@@ -37,7 +37,11 @@ cat <<EOF > /etc/docker/daemon.json
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
-    "max-file": "3"
+    "max-file": "3",
+    "storage-driver": "overlay2",
+    "storage-opts": [
+    "overlay2.override_kernel_check=true"
+  ]
   }
 }
 EOF
