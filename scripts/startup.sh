@@ -155,11 +155,11 @@ EOF
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Pulling containers (Optimized for e2-micro IO) ==="
-retry timeout 800 docker compose pull || {
+retry timeout 1100 docker compose pull || {
   echo "⚠️ compose pull failed (network/throttle), initiating fallback to direct pull..."
   docker system prune -f --volumes
 
-  retry timeout 800 docker pull docker.n8n.io/n8nio/n8n:2.16.1 || { 
+  retry timeout 1100 docker pull docker.n8n.io/n8nio/n8n:2.16.1 || { 
     echo "❌ CRITICAL: Fallback n8n pull failed"; 
     exit 1; 
   }
