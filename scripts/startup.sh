@@ -37,11 +37,7 @@ cat <<EOF > /etc/docker/daemon.json
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
-    "max-file": "3",
-    "storage-driver": "overlay2",
-    "storage-opts": [
-    "overlay2.override_kernel_check=true"
-  ]
+    "max-file": "3"
   }
 }
 EOF
@@ -51,18 +47,25 @@ mkdir -p /etc/systemd/system/containerd.service.d
 
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
-CPUQuota=70%
+CPUAccounting=true
+CPUQuota=85%
+TimeoutStartSec=180
 EOF
 
 cat <<EOF > /etc/systemd/system/containerd.service.d/throttle.conf
 [Service]
-CPUQuota=70%
+CPUAccounting=true
+CPUQuota=85%
+TimeoutStartSec=180
 EOF
 
 sysctl -w vm.swappiness=10
 systemctl daemon-reload
+systemctl restart containerd
+sleep 5
 retry systemctl restart docker
 systemctl enable docker
+systemctl enable containerd
 
 echo "=== Get Secrets from Secret Manager ==="
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || { 
