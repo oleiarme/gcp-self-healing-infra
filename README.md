@@ -42,11 +42,25 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 
 ## How Self-Healing Works
 
-1. Health check polls `http://VM:5678/healthz` every **10s** (GCP check_interval_sec)
-2. If n8n stops responding → MIG automatically **replaces the VM**
-3. New VM runs `startup.sh` → installs Docker → pulls n8n → starts containers
-4. Total recovery time: ~5–10 minutes (see SLO below)
-5. Zero manual intervention required
+1. **In-cluster liveness** — GCP HTTP health check polls `/healthz` on the
+   VM every **10s** (timeout 5s). 2 successes → healthy, 5 failures →
+   unhealthy (~50s detection window).
+2. **Docker container healthcheck** — the `n8n` container self-reports
+   health every 10s after a **420s** `start_period` grace window
+   (Docker-level, mirrors the GCP interval so there is no stale-health
+   window where GCP reads healthy while n8n is already dead).
+3. **MIG auto-healing** — unhealthy status triggers VM replacement.
+   `initial_delay_sec = 600s` (> Docker `start_period` + 3 min safety)
+   lets `startup.sh` reach `/healthz` OK before any replacement timer
+   starts, preventing cold-boot loops on e2-micro.
+4. **New VM runs `startup.sh`** → apt update → install Docker → pull n8n
+   and cloudflared images → start containers → run n8n DB migrations.
+5. **Recovery time budget:**
+   - Cold start (scratch boot): ≤ 17 min (600s initial_delay + 50s
+     detection + ~6 min startup).
+   - Warm replace (template change, no initial_delay): ≤ 6 min.
+   - See the [SLO section](#slo--sli) for the SLI-side target (10 min).
+6. Zero manual intervention required.
 
 ## Stack
 
