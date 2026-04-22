@@ -145,18 +145,49 @@ Push to `main` → CI/CD deploys automatically.
 
 | Metric | Target | How measured |
 |--------|--------|--------------|
-| **Availability** | 99.5% / month | GCP health check: 2 successes → healthy, 5 failures → unhealthy |
-| **Recovery time** | < 10 min | MIG detects failure → replaces VM → startup.sh completes |
-| **Health check interval** | 10s | GCP polls `/healthz` every 10s with 5s timeout |
+| **Availability** | 99.5% over 28d rolling | External uptime check on `https://<n8n_public_host>/healthz`, 6 probe locations, 60s period (see `terraform/monitoring.tf`) |
+| **Recovery time** | Cold ≤ 17 min, Warm ≤ 7 min | `initial_delay_sec` + HC detection + startup.sh — see [How Self-Healing Works](#how-self-healing-works) |
+| **In-cluster HC interval** | 10s | GCP polls `/healthz` every 10s with 5s timeout |
 | **Startup grace period** | 420s | Docker `start_period` before n8n reports healthy/unhealthy |
 
 **Error budget:** 3.6h downtime/month (0.5%) is acceptable.
-If MIG recreates VM more than ~3 times/month → investigate root cause (see [Runbook](Runbook.md)).
+If the 28d error budget is consumed > 50% → weekly reviews until month end.
+If consumed 100% → release freeze per `docs/error-budget-policy.md` (Phase 5).
 
 **What this does NOT cover:**
 - Cloud SQL availability (managed by GCP, separate SLA)
-- Cloudflare Tunnel availability
+- Cloudflare Tunnel availability (status.cloudflare.com)
 - Network partition between VM and database
+
+## Observability & Alerting
+
+Defined as code in `terraform/monitoring.tf` and `terraform/dashboards.tf`.
+
+### External SLI probe
+`google_monitoring_uptime_check_config.n8n` hits `https://<n8n_public_host>/healthz` every 60s from all default probe locations and requires a 2xx response whose body contains `ok`. This is the single source of truth for the 99.5% availability SLI.
+
+### Burn-rate alerts (multi-window, multi-burn-rate, Google SRE Workbook)
+
+| Policy | Signal | Burn rate | Trigger | Severity | Channels |
+|---|---|---|---|---|---|
+| `n8n SLO fast burn` | uptime good-fraction < 0.928 over **1h** | 14.4× (2% of 28d budget / 1h) | within 1h window | **CRITICAL** | email |
+| `n8n SLO slow burn` | uptime good-fraction < 0.97 over **6h** | 6× (5% of 28d budget / 6h) | within 6h window | WARNING | email |
+| `n8n startup script CRITICAL` | log-based metric `n8n/startup_critical` > 0 in 5m | n/a | 1 event | WARNING | email |
+
+All alert policies carry a `runbook` user-label that deep-links to `Runbook.md` so the on-call engineer lands on the triage page directly from the alert.
+
+### Notification channels
+- `TF_VAR_oncall_email` — required. Primary on-call email.
+- **Slack** — intentionally deferred. A Slack incoming-webhook URL embeds its own auth token in the path, which would leak through Terraform state and the Cloud Monitoring API if plumbed into a `webhook_tokenauth` channel. Slack delivery will be added in a later phase using the native `type = "slack"` channel with an OAuth token held in `sensitive_labels`.
+
+### Log ingestion
+`scripts/startup.sh` installs the Ops Agent with a deliberately **logging-only** config (`/etc/google-cloud-ops-agent/config.yaml`). Host- and process-metrics receivers are off — they exceeded the e2-micro IO budget historically (commit `del ops agent not enouth io`). The single tail receiver on `/var/log/startup.log` is what feeds the `n8n/startup_critical` log-based metric.
+
+### Dashboard
+`google_monitoring_dashboard.n8n_slo` is rendered from `terraform/dashboards/n8n-slo.json.tftpl` and carries four tiles: uptime good-fraction, 1h/6h burn rate with alert thresholds, MIG instance count, and startup CRITICAL events counter. The `dashboard_id` output gives a direct link.
+
+### Design note on `google_monitoring_slo`
+A formal `google_monitoring_slo` resource is intentionally **not** created in this phase — the SLO report-card semantics for boolean uptime metrics (windows-based vs request-based ratio) warrant their own review. Burn-rate alerting does not need that resource; both alert policies compute the burn rate directly from the uptime-check metric via MQL, which is the canonical, unambiguous definition. The SLO resource can be added later for the Cloud Monitoring UI report without changing alerting behaviour.
 
 ## Outputs
 

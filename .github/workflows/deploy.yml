@@ -52,6 +52,8 @@ jobs:
           TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
           TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
           TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+          TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
+          TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -63,3 +65,5 @@ jobs:
           TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
           TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
           TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+          TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
+          TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
