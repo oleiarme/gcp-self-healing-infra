@@ -14,13 +14,10 @@ updates:
         patterns:
           - "*"
 
-  # Container images shipped on the VM via scripts/startup.sh ---------------
-  # We do NOT have a Dockerfile, but Dependabot's docker ecosystem can also
-  # bump images referenced inside terraform variable defaults. The variables
-  # n8n_image and cloudflared_image hold "<image>:<tag>@sha256:<digest>" so
-  # Dependabot will keep the digests fresh as upstream releases new tags.
-  - package-ecosystem: docker
-    directory: "/terraform"
-    schedule:
-      interval: weekly
-      day: monday
+  # Container image digests (var.n8n_image, var.cloudflared_image) ---------
+  # Intentionally NOT handled here. Dependabot's `docker` ecosystem scans
+  # Dockerfiles and docker-compose files — it does not parse Terraform
+  # variable defaults, which is where our digests live. Instead, see
+  # .github/workflows/digest-refresh.yml: a weekly scheduled job that uses
+  # `crane digest` to re-resolve both images and opens a PR if either
+  # digest has moved.

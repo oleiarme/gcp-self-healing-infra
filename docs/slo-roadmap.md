@@ -155,8 +155,11 @@ HC state, MIG size, startup failures over time.
   SA: `roles/logging.logWriter`, `roles/monitoring.metricWriter`. The
   per-secret `roles/secretmanager.secretAccessor` bindings already exist.
 * **Image pinning by digest.** Replace `n8nio/n8n:2.16.1` and
-  `cloudflared:2026.3.0` in `scripts/startup.sh` with `@sha256:…`. Dependabot
-  config (Phase 6) keeps them current.
+  `cloudflared:2026.3.0` in `scripts/startup.sh` with `@sha256:…`. A scheduled
+  GitHub Actions workflow (`.github/workflows/digest-refresh.yml`) uses
+  `crane digest` weekly to bump the pinned digests and open a review PR;
+  Dependabot cannot do this because its `docker` ecosystem only scans
+  Dockerfiles / docker-compose files, neither of which exist in this repo.
 * **WIF attribute condition.** Constrain the WIF pool binding to
   `assertion.repository_owner == "kwonvkim-collab" && assertion.ref == "refs/heads/main"`.
   If the pool is provisioned out-of-band, document the exact gcloud command
@@ -181,8 +184,10 @@ HC state, MIG size, startup failures over time.
   `monitoring.metricWriter`). No `cloud-platform` scope.
 - **Secrets:** Google Secret Manager, per-region user-managed replication,
   `prevent_destroy = true`.
-- **Images:** `n8n` and `cloudflared` pinned by SHA256 digest in
-  `scripts/startup.sh`. Dependabot refreshes digests weekly.
+- **Images:** `n8n` and `cloudflared` pinned by SHA256 digest via
+  `terraform/variables.tf` defaults (`var.n8n_image`, `var.cloudflared_image`),
+  plumbed into `scripts/startup.sh` via `templatefile()`. Refreshed weekly by
+  `.github/workflows/digest-refresh.yml` (crane-based PR bot).
 - **CI static analysis:** `terraform fmt`, `terraform validate`, `tflint`,
   `tfsec`, `checkov`, `shellcheck`.
 - **Deploy gate:** GitHub Environment `production` with required reviewer.

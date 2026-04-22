@@ -125,7 +125,7 @@ Both container images run on the VM are pinned by **SHA256 digest** in addition 
 | n8n | `var.n8n_image` | `docker.n8n.io/n8nio/n8n:2.16.1@sha256:ad20607c…` |
 | cloudflared | `var.cloudflared_image` | `cloudflare/cloudflared:2026.3.0@sha256:6b599ca3…` |
 
-Dependabot keeps both digests fresh — see `.github/dependabot.yml`.
+Digests are kept fresh by `.github/workflows/digest-refresh.yml`: a scheduled GitHub Actions job (weekly, Mondays 06:00 UTC) that re-resolves both image digests with `crane digest`, runs `terraform validate` against the new refs, and opens a review PR via `peter-evans/create-pull-request` when either digest has moved. Dependabot itself is deliberately **not** used for these images — its `docker` ecosystem only scans Dockerfiles and docker-compose files, neither of which exists in this repo; the digests live inside Terraform variable defaults which no Dependabot ecosystem understands. Manual refresh is also supported: `bash scripts/refresh-digests.sh` does exactly what the workflow does and updates `variables.tf` in place.
 
 ### Deploy gate
 
@@ -147,7 +147,7 @@ Dependabot keeps both digests fresh — see `.github/dependabot.yml`.
 ### Supply chain
 
 - All Actions in workflows are pinned by major version (`@v4` etc.). Dependabot (`.github/dependabot.yml`) groups weekly minor + patch bumps into one PR.
-- Container image digests refreshed by Dependabot's `docker` ecosystem.
+- Container image digests (`var.n8n_image`, `var.cloudflared_image`) refreshed weekly by `.github/workflows/digest-refresh.yml` (`crane digest` → `terraform validate` → `peter-evans/create-pull-request`). Dependabot's `docker` ecosystem is deliberately not used here because it cannot parse Terraform variable defaults — see the “Container image pinning” subsection above for the full rationale and the manual `bash scripts/refresh-digests.sh` fallback.
 
 
 
