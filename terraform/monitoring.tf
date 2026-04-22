@@ -196,7 +196,7 @@ resource "google_monitoring_alert_policy" "startup_critical" {
   severity     = "WARNING"
   combiner     = "OR"
   user_labels = {
-    runbook = "https://github.com/kwonvkim-collab/gcp-self-healing-infra/blob/main/Runbook.md"
+    runbook = "gcp-self-healing-infra-runbook-md"
     scope   = "startup"
   }
 
