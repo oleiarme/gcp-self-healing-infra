@@ -182,6 +182,26 @@ A `google_billing_budget` watches the project and alerts the on-call email chann
 
 The budget is **opt-in**: set the `GCP_BILLING_ACCOUNT_ID` secret (format `AAAAAA-BBBBBB-CCCCCC`, from `gcloud beta billing accounts list`) to enable it. With the secret unset, `var.billing_account_id` defaults to `""` and the `google_billing_budget` resource is provisioned with `count = 0` — the rest of the stack deploys unchanged. Rationale: billing account IDs are account-scoped metadata (not per-environment), and some orgs treat them as confidential, so forcing the ID as a required variable would gate the whole stack on a secret operators may not want to provision.
 
+## Reliability Evidence
+
+Claims backed by code are necessary but not sufficient — a Runbook
+that says "~17 minute MTTR worst case" without recent measurement is
+just hope. Phase 6 of [`docs/slo-roadmap.md`](docs/slo-roadmap.md)
+introduces a set of cheap, recoverable drills rehearsed on cadence
+(see [`docs/drills/README.md`](docs/drills/README.md) for schedule
+and pass criteria).
+
+Each row below is produced by a drill script and pasted in verbatim;
+the table is append-only. A failure (MTTR outside target, manual
+intervention needed, alert didn't fire) triggers a post-mortem via
+[`docs/postmortems/TEMPLATE.md`](docs/postmortems/TEMPLATE.md) and
+the row still goes in the table with `FAIL` so regressions are
+visible.
+
+| Date (UTC) | Drill | MTTR | Result |
+|---|---|---|---|
+| _pending first run_ | VM kill (regional MIG) | target ≤ 1020s | — |
+
 ## Quick Start
 
 ### 1. Clone & configure
