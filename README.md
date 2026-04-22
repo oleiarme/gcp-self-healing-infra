@@ -147,7 +147,7 @@ Digests are kept fresh by `.github/workflows/digest-refresh.yml`: a scheduled Gi
 ### Supply chain
 
 - All Actions in workflows are pinned by major version (`@v4` etc.). Dependabot (`.github/dependabot.yml`) groups weekly minor + patch bumps into one PR.
-- Container image digests refreshed by Dependabot's `docker` ecosystem.
+- Container image digests (`var.n8n_image`, `var.cloudflared_image`) refreshed weekly by `.github/workflows/digest-refresh.yml` (`crane digest` → `terraform validate` → `peter-evans/create-pull-request`). Dependabot's `docker` ecosystem is deliberately not used here because it cannot parse Terraform variable defaults — see the “Container image pinning” subsection above for the full rationale and the manual `bash scripts/refresh-digests.sh` fallback.
 
 
 
