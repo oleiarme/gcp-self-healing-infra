@@ -89,6 +89,34 @@ export CF_TOKEN
 export N8N_KEY
 export DB_PASSWORD
 
+echo "=== Install Ops Agent (logging-only, minimal receiver set) ==="
+# We deliberately ship a logging-only Ops Agent config. Host-metrics and
+# process-metrics receivers from the default config pushed e2-micro over its
+# IO budget (see commit 'del ops agent not enouth io' on main). The single
+# tail receiver below is what powers the n8n/startup_critical log-based
+# metric defined in terraform/monitoring.tf.
+mkdir -p /etc/google-cloud-ops-agent
+cat <<'EOF' > /etc/google-cloud-ops-agent/config.yaml
+logging:
+  receivers:
+    startup_log:
+      type: files
+      include_paths:
+        - /var/log/startup.log
+  service:
+    pipelines:
+      default_pipeline:
+        receivers:
+          - startup_log
+metrics:
+  service:
+    pipelines: {}
+EOF
+
+retry curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+retry bash add-google-cloud-ops-agent-repo.sh --also-install
+systemctl enable --now google-cloud-ops-agent
+
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
 cd /opt/n8n
