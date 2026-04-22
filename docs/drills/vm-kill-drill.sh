@@ -43,11 +43,15 @@
 #   ./docs/drills/vm-kill-drill.sh
 #
 # Exit codes
-#   0 — drill completed, MTTR values printed.
+#   0 — drill completed AND both MTTRs are within TARGET_MTTR_SECONDS.
 #   1 — prerequisite check failed (missing env / CLI / MIG not found).
 #   2 — MIG never produced a replacement VM within MAX_WAIT_SECONDS.
 #   3 — replacement VM created but external probe never returned 2xx
 #       within MAX_WAIT_SECONDS.
+#   4 — drill completed but at least one MTTR exceeded TARGET_MTTR_SECONDS
+#       (recovery worked, but outside the budget the README/Runbook claim).
+#       The markdown row is still emitted with Result=FAIL so the
+#       regression shows up in README §Reliability Evidence.
 # =============================================================================
 
 set -euo pipefail
@@ -61,13 +65,16 @@ set -euo pipefail
 : "${EXTERNAL_URL:?EXTERNAL_URL not set (e.g. https://n8n.example.com/healthz)}"
 : "${MAX_WAIT_SECONDS:=1500}"   # 25 min — one std. dev. above docs-claimed worst case
 : "${POLL_INTERVAL_SECONDS:=15}"
+: "${TARGET_MTTR_SECONDS:=1020}"  # Must stay in sync with the ~17 min worst case in README §Resilience / Runbook §1.
 
 log() {
     printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
 }
 
 fail() {
-    log "FAIL: $*"
+    # Log only the first arg; $2 (optional) is the exit code and must
+    # never leak into the human-readable message.
+    log "FAIL: $1"
     exit "${2:-1}"
 }
 
@@ -177,6 +184,20 @@ MTTR_REPLACEMENT=$(( T_REPLACEMENT - T_KILL ))
 MTTR_EXTERNAL=$(( T_EXTERNAL_OK - T_KILL ))
 RUN_DATE=$(date -u +%Y-%m-%d)
 
+# Compare both MTTR values against the declared target. Either
+# signal breaching the budget fails the drill — the whole point is
+# to catch regressions, not just outright breakage. `docs/drills/
+# README.md` §Pass criteria states that partial passes are failures
+# and trigger a post-mortem.
+if [ "${MTTR_REPLACEMENT}" -le "${TARGET_MTTR_SECONDS}" ] \
+   && [ "${MTTR_EXTERNAL}"    -le "${TARGET_MTTR_SECONDS}" ]; then
+    RESULT="PASS"
+    FINAL_EXIT=0
+else
+    RESULT="FAIL"
+    FINAL_EXIT=4
+fi
+
 cat <<EOF
 
 ======================================================================
@@ -186,11 +207,14 @@ cat <<EOF
   baseline instance:          ${BASELINE_NAME}
   MTTR (MIG replacement):     ${MTTR_REPLACEMENT}s
   MTTR (external /healthz):   ${MTTR_EXTERNAL}s
-  target from README/Runbook: <=1020s (~17 min worst case)
+  target from README/Runbook: <=${TARGET_MTTR_SECONDS}s (~17 min worst case)
+  result:                     ${RESULT}
 
   Markdown row for README §Reliability Evidence:
 
-| ${RUN_DATE} | VM kill (regional MIG) | ${MTTR_REPLACEMENT}s VM / ${MTTR_EXTERNAL}s external | PASS |
+| ${RUN_DATE} | VM kill (regional MIG) | ${MTTR_REPLACEMENT}s VM / ${MTTR_EXTERNAL}s external | ${RESULT} |
 
 ======================================================================
 EOF
+
+exit "${FINAL_EXIT}"
