@@ -34,6 +34,51 @@ resource "google_project_service" "required" {
 resource "google_service_account" "vm_sa" {
   account_id   = "n8n-app-sa"
   display_name = "n8n VM Service Account"
+
+  # Re-creating the SA would orphan every secretmanager.secretAccessor
+  # binding, locking the running VM out of Secret Manager and breaking
+  # n8n on the next restart. Force a deliberate two-step destroy if we
+  # ever genuinely need to remove it.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# ==========================================
+# 1.0 PROJECT-LEVEL IAM (least-privilege)
+# ==========================================
+# Historically the VM ran with `scopes = ["cloud-platform"]` and no
+# explicit IAM bindings, which meant the VM SA inherited whatever roles
+# anyone happened to grant at the project level. The OAuth scope
+# `cloud-platform` is still set on the VM (see google_compute_instance_template
+# below) because Secret Manager has no narrower scope and `metadata.startup-script`
+# uses Application Default Credentials to read secrets — but the *effective*
+# permissions are now the intersection of (cloud-platform scope) ∩ (the
+# minimal IAM bindings declared here). Adding a new permission is now an
+# explicit, code-reviewed change rather than an accidental side effect.
+#
+# Bindings:
+#   * roles/logging.logWriter   — Ops Agent ships /var/log/startup.log
+#                                 to Cloud Logging (used by the
+#                                 n8n/startup_critical log-based metric).
+#   * roles/monitoring.metricWriter — write custom metrics later (Phase
+#                                 4 / Phase 6 chaos drill metrics). Cheap
+#                                 to grant up-front; avoids a re-apply
+#                                 just to add it.
+# Secret Manager access is granted per-secret (roles/secretmanager.secretAccessor)
+# below — never project-wide — so a future second secret in this project
+# is opt-in for this VM rather than automatic.
+
+resource "google_project_iam_member" "vm_sa_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+resource "google_project_iam_member" "vm_sa_metric_writer" {
+  project = var.project_id
+  role    = "roles/monitoring.metricWriter"
+  member  = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
 # ==========================================
@@ -47,6 +92,15 @@ resource "google_secret_manager_secret" "db_password" {
     user_managed {
       replicas { location = "us-central1" }
     }
+  }
+
+  # `terraform destroy` must never blow away a credential the running VM
+  # depends on — recreating the secret resource would invalidate IAM
+  # bindings and secret_versions, dropping n8n into a Postgres-auth-fail
+  # crash loop. Forces an explicit two-step removal (`terraform state rm`
+  # then destroy) for legitimate decommissioning.
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -69,6 +123,14 @@ resource "google_secret_manager_secret" "n8n_key" {
       replicas { location = "us-central1" }
     }
   }
+
+  # See note on db_password: recreating the encryption key secret would
+  # invalidate every credential n8n has stored (OAuth tokens for
+  # connectors etc.) — this is unrecoverable without a backup of the
+  # secret. prevent_destroy forces a deliberate manual workflow.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_secret_manager_secret_version" "n8n_key_v" {
@@ -89,6 +151,11 @@ resource "google_secret_manager_secret" "cf_token" {
     user_managed {
       replicas { location = "us-central1" }
     }
+  }
+
+  # See note on db_password.
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
@@ -122,6 +189,16 @@ resource "google_compute_health_check" "hc" {
 }
 
 resource "google_compute_instance_template" "tpl" {
+  # Public-IP NAT exception (checkov:skip=CKV_GCP_40):
+  # The VM runs a Cloudflare Tunnel as its sole ingress path — there are no
+  # open listening ports and GCP firewall keeps the default-VPC inbound
+  # ruleset. The public IP is used strictly for OUTBOUND traffic: apt,
+  # docker pull, Cloud Logging, Cloud Monitoring, and the cloudflared
+  # outbound tunnel connection. Moving this to Cloud NAT would satisfy
+  # CKV_GCP_40 but adds a recurring NAT gateway cost that breaks the
+  # Free-Tier envelope this repo is constrained to. Shielded VM + blocked
+  # project-wide SSH keys cover the residual VM-level risk.
+  # checkov:skip=CKV_GCP_40: public-IP is outbound-only; NAT violates Free-Tier budget
   depends_on = [
     google_secret_manager_secret.db_password,
     google_secret_manager_secret.n8n_key,
@@ -137,6 +214,15 @@ resource "google_compute_instance_template" "tpl" {
     boot         = true
   }
 
+  # Shielded VM (Secure Boot + vTPM + integrity monitoring). Free-Tier
+  # compatible; protects against boot-time rootkits and kernel-level
+  # tampering. Closes Checkov CKV_GCP_39.
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
   network_interface {
     network = "default"
 
@@ -146,11 +232,22 @@ resource "google_compute_instance_template" "tpl" {
   }
 
   service_account {
-    email  = google_service_account.vm_sa.email
+    email = google_service_account.vm_sa.email
+    # `cloud-platform` looks broad but is required because Secret Manager
+    # has no narrower OAuth scope (see Google's GCE access-scope docs).
+    # Effective permission set is the intersection of this scope and the
+    # explicit IAM role bindings on google_service_account.vm_sa
+    # (roles/logging.logWriter, roles/monitoring.metricWriter,
+    # per-secret roles/secretmanager.secretAccessor) — see the
+    # "PROJECT-LEVEL IAM" section above.
     scopes = ["cloud-platform"]
   }
 
   metadata = {
+    # Block OS-login / project-wide SSH keys. Runbook procedures do not
+    # rely on interactive SSH — everything is either a `terraform apply`
+    # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
+    block-project-ssh-keys = "true"
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
       db_host               = var.db_host
       db_user               = var.db_user
@@ -159,6 +256,8 @@ resource "google_compute_instance_template" "tpl" {
       CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
       db_name               = "postgres"
       db_port               = "5432"
+      n8n_image             = var.n8n_image
+      cloudflared_image     = var.cloudflared_image
     })
   }
 
