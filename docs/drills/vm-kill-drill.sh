@@ -146,11 +146,17 @@ while [ $(($(date -u +%s) - T_KILL)) -lt "${MAX_WAIT_SECONDS}" ]; do
         --region="${REGION}" \
         --project="${PROJECT_ID}" \
         --format='value(instance)' 2>/dev/null | head -1 || true)
+    ELAPSED=$(( $(date -u +%s) - T_KILL ))
     if [ -n "${CURRENT}" ] && [ "$(basename "${CURRENT}")" != "${BASELINE_NAME}" ]; then
         T_REPLACEMENT=$(date -u +%s)
         log "  replacement: $(basename "${CURRENT}") at t+$(( T_REPLACEMENT - T_KILL ))s"
         break
     fi
+    # Per-tick log so docs/drills/README.md §What a drill run produces
+    # claim ("structured log line per 15-second poll tick") actually
+    # holds. Without this the operator sees silent stderr for 5-17
+    # minutes and cannot distinguish a working poll from a hung one.
+    log "  poll t+${ELAPSED}s: no replacement yet (current=$(basename "${CURRENT:-none}"))"
     sleep "${POLL_INTERVAL_SECONDS}"
 done
 
@@ -165,11 +171,13 @@ log "Step 2b: wait for external probe recovery"
 T_EXTERNAL_OK=""
 while [ $(($(date -u +%s) - T_KILL)) -lt "${MAX_WAIT_SECONDS}" ]; do
     CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${EXTERNAL_URL}" || echo "000")
+    ELAPSED=$(( $(date -u +%s) - T_KILL ))
     if [ "${CODE}" = "200" ]; then
         T_EXTERNAL_OK=$(date -u +%s)
         log "  external probe 200 at t+$(( T_EXTERNAL_OK - T_KILL ))s"
         break
     fi
+    log "  poll t+${ELAPSED}s: external probe HTTP ${CODE}"
     sleep "${POLL_INTERVAL_SECONDS}"
 done
 
