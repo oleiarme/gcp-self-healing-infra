@@ -151,6 +151,30 @@ Digests are kept fresh by `.github/workflows/digest-refresh.yml`: a scheduled Gi
 
 
 
+## Resilience & DR
+
+(Phase 4 of [`docs/slo-roadmap.md`](docs/slo-roadmap.md). Operational procedures live in [Runbook §5](Runbook.md#5-backup--dr).)
+
+### Regional MIG
+
+The Managed Instance Group is defined as `google_compute_region_instance_group_manager` on `us-central1` with `distribution_policy_zones = ["us-central1-a", "us-central1-b", "us-central1-f"]`. `target_size = 1`, so at any instant exactly one e2-micro runs — Free-Tier compliant — but on a zonal incident the MIG's autohealing policy recreates the VM in a surviving zone instead of staying dead in the blast-radius zone. Expected **zonal-failover MTTR ≈ cold-start MTTR (~17 min worst case)** because the replacement path always runs full `startup.sh` on a fresh VM; if a zonal incident outlasts the SLO's 1-hour fast-burn window the fast-burn alert fires through the same email channel as every other SLO breach. **What this does not cover:** a full `us-central1` region outage. That would require a pre-provisioned standby in another region (out of Free Tier) or a manual Terraform re-apply in a fresh project pointed at a different region — accepted risk for this repo's cost envelope.
+
+### Cloud SQL PITR
+
+Cloud SQL PostgreSQL runs with PITR enabled, retention 7 days (Cloud SQL default). Restore procedure: [Runbook §5.1](Runbook.md#51-cloud-sql-point-in-time-recovery). **PITR always clones to a sibling instance — we never restore in place so the original is preserved for forensics.**
+
+### Terraform state rollback
+
+The GCS bucket that holds `terraform.tfstate` has **object versioning enabled** and a lifecycle rule that keeps the last 30 non-current versions for up to 90 days. Every `terraform apply` therefore produces a rollback-able snapshot of state. See [`terraform/backend.conf.example`](terraform/backend.conf.example) for the one-shot `gcloud storage buckets …` bootstrap commands, and [Runbook §5.2](Runbook.md#52-terraform-state-rollback) for the restore procedure (`gcloud storage cp gs://<bucket>/<prefix>/default.tfstate#<generation> …`).
+
+### Secret version restore
+
+Each `google_secret_manager_secret` has `lifecycle { prevent_destroy = true }` (Phase 3), so the secret resource itself cannot be wiped by `terraform destroy`. Individual *versions* stay disposable via `gcloud secrets versions disable|enable`: full procedure in [Runbook §5.3](Runbook.md#53-secret-version-restore).
+
+### Cost guardrail
+
+A `google_billing_budget` watches the project and alerts the on-call email channel (reused from Phase 2) at **50 / 90 / 100 %** of `var.monthly_budget_usd` (default `$5`). The budget amount is intentionally narrow — any steady-state spend above this is either a misconfiguration (accidental VM size bump, surprise egress) or a conscious scaling decision that should be explicit in a PR. Handling matrix: [Runbook §5.5](Runbook.md#55-billing-budget-alert).
+
 ## Quick Start
 
 ### 1. Clone & configure
