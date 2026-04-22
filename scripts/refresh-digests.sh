@@ -69,8 +69,14 @@ while IFS= read -r line; do
   new_ref="${image_with_tag}@${new_digest}"
   echo "  ↑ bump: $current_digest → $new_digest"
 
-  # Escape slashes for sed.
-  esc_current="$(printf '%s\n' "$current_ref" | sed 's/[\/&]/\\&/g')"
+  # Escape BRE metacharacters on the LHS of sed so image refs containing
+  # dots ("docker.n8n.io", "2.16.1") don't become regex wildcards. The
+  # classes cover: dots, square brackets, backslash, caret, dollar, star,
+  # forward slash and ampersand — the full set of BRE metacharacters plus
+  # the two sed delimiter/back-reference characters. The RHS only needs
+  # slash + ampersand escaped because the replacement string is not a
+  # regex.
+  esc_current="$(printf '%s\n' "$current_ref" | sed 's/[][\\\/.^$*&]/\\&/g')"
   esc_new="$(printf '%s\n' "$new_ref" | sed 's/[\/&]/\\&/g')"
   sed -i "s/${esc_current}/${esc_new}/g" "$TF_VARS_FILE"
   changed=1

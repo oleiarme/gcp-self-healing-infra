@@ -169,6 +169,22 @@ services:
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
       TUNNEL_TOKEN: \$CF_TOKEN
+    healthcheck:
+      # cloudflared exposes a /ready endpoint on its metrics port whenever
+      # it has at least one registered connection to the Cloudflare edge.
+      # Without this healthcheck, a silently-dead cloudflared would keep
+      # n8n reachable only from inside the VM — the external uptime check
+      # would catch it eventually, but Docker's own restart policy never
+      # gets a chance to trigger on anything shorter than a full crash.
+      # Probing /ready every 10s (matching n8n's healthcheck cadence) lets
+      # docker compose mark cloudflared unhealthy within ~1m of edge-link
+      # loss, which is what the start_period 30s allows for cold-start
+      # tunnel registration.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:2000/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
@@ -181,15 +197,44 @@ echo "=== Starting Containers ==="
 docker compose up -d
 
 echo "=== Verifying n8n startup ==="
+# n8n must be /healthz-green AND cloudflared's tunnel must be registered
+# with the edge. Historically this loop only checked n8n, so a silently-
+# failed cloudflared would let startup.sh exit 0 even though the external
+# SLI probe (which goes through the tunnel) was guaranteed to fail. Both
+# checks must succeed simultaneously in the same iteration, otherwise
+# the loop keeps waiting.
 HEALTHY=false
+# Track which probe was the last to fail so the CRITICAL message —
+# which feeds the n8n_startup_critical log-based metric and the on-call
+# pager — names the actually-failing component instead of blaming n8n
+# every time. The log-based metric filter in monitoring.tf matches on
+# the substring "CRITICAL: " so the counter keeps working regardless
+# of which of the two suffixes we print.
+last_fail="both n8n and cloudflared"
 # 60 попыток по 10 секунд = 10 минут ожидания
 for i in {1..60}; do
+  n8n_ok=false
+  cf_ok=false
   if curl -sf http://localhost:5678/healthz >/dev/null; then
-    echo "✅ n8n is up and healthy"
-    HEALTHY=true
-    break 
+    n8n_ok=true
   fi
-  echo "⏳ Waiting for n8n to initialize ($i/60)..."
+  if docker exec "$(docker compose ps -q cloudflared)" \
+       wget -q -O /dev/null http://localhost:2000/ready 2>/dev/null; then
+    cf_ok=true
+  fi
+  if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
+    echo "✅ n8n + cloudflared are up and healthy"
+    HEALTHY=true
+    break
+  fi
+  if [ "$n8n_ok" = false ] && [ "$cf_ok" = false ]; then
+    last_fail="both n8n and cloudflared"
+  elif [ "$n8n_ok" = false ]; then
+    last_fail="n8n"
+  else
+    last_fail="cloudflared"
+  fi
+  echo "⏳ Waiting for n8n + cloudflared to initialize ($i/60, last fail: $last_fail)..."
   sleep 10
 done
 
@@ -198,7 +243,13 @@ if [ "$HEALTHY" = true ]; then
   docker compose ps
   exit 0
 else
-  echo "❌ CRITICAL: n8n failed to start within 10 minutes"
+  # IMPORTANT: keep the exact substring "CRITICAL: startup failed" —
+  # the log-based metric n8n_startup_critical in terraform/monitoring.tf
+  # filters on it. The per-component detail ("n8n" / "cloudflared" /
+  # "both") follows after an em-dash so on-call can triage without
+  # opening logs, while the metric stays stable regardless of which
+  # component failed.
+  echo "❌ CRITICAL: startup failed — $last_fail did not become healthy within 10 minutes"
   docker compose logs --tail=100
   exit 1
 fi

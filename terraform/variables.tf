@@ -30,8 +30,9 @@ variable "mig_zones" {
 }
 
 variable "billing_account_id" {
-  description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). Required to create the google_billing_budget. Find via `gcloud beta billing accounts list`."
+  description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). When set, enables the google_billing_budget cost guardrail; when empty (default), the budget resource is not created and cost alerting is left off. Find the ID via `gcloud beta billing accounts list`."
   type        = string
+  default     = ""
 }
 
 variable "monthly_budget_usd" {
@@ -84,12 +85,26 @@ variable "oncall_email" {
   type        = string
 }
 
-# NOTE: TF_VAR_slack_webhook_url is intentionally NOT wired in this phase.
-# A Slack incoming webhook URL is itself the auth credential, so stuffing
-# it into a google_monitoring_notification_channel "webhook_tokenauth"
-# labels.url leaks the secret through Terraform state and the Cloud
-# Monitoring API. Slack delivery will be added in a later phase using the
-# native type = "slack" channel with an OAuth token in sensitive_labels.
+# Slack delivery — Phase 4 follow-up. Uses the native type = "slack"
+# notification channel, which takes an OAuth bot token in
+# sensitive_labels.auth_token and a channel name in labels.channel_name.
+# Unlike an incoming-webhook URL (which embeds its own auth), the OAuth
+# token is stored server-side by Cloud Monitoring and never round-trips
+# through state in plaintext. Both vars default to "" so the Slack
+# channel is only provisioned when operators explicitly opt in by
+# setting TF_VAR_slack_auth_token.
+variable "slack_auth_token" {
+  description = "Slack bot OAuth token (xoxb-...). Leave empty to disable Slack notification channel. When set, must have chat:write permission on var.slack_channel."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "slack_channel" {
+  description = "Slack channel name (with leading #) that receives SLO + startup + budget alerts. Ignored if var.slack_auth_token is empty."
+  type        = string
+  default     = "#n8n-ops"
+}
 
 # --------------------------------------------------------
 # Container image pinning (Phase 3 of docs/slo-roadmap)
@@ -142,4 +157,23 @@ variable "wif_allowed_ref" {
   description = "Fully-qualified Git ref allowed to assume the WIF provider (e.g. 'refs/heads/main')."
   type        = string
   default     = "refs/heads/main"
+}
+
+# Phase 4 follow-up: optional enforcement of the WIF attribute condition
+# via a data source + lifecycle precondition. If both IDs are provided,
+# Terraform fetches the actual attribute_condition from the running WIF
+# provider and refuses to plan when it drifts from the canonical string
+# derived from wif_allowed_repository / wif_allowed_ref. If either is
+# empty, enforcement is skipped and the output-only documentation from
+# Phase 3 is the only safeguard.
+variable "wif_pool_id" {
+  description = "Short ID of the existing Workload Identity Pool (not the full resource name). Example: 'github-actions-pool'. Leave empty to skip enforcement."
+  type        = string
+  default     = ""
+}
+
+variable "wif_provider_id" {
+  description = "Short ID of the OIDC provider inside var.wif_pool_id. Example: 'github-actions'. Leave empty to skip enforcement."
+  type        = string
+  default     = ""
 }

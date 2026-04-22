@@ -36,18 +36,33 @@ resource "google_monitoring_notification_channel" "email" {
   force_delete = false
 }
 
-# NOTE on Slack delivery:
-#   Slack delivery is intentionally not provisioned in this phase. The
-#   obvious route (type = "webhook_tokenauth" with var.slack_webhook_url in
-#   labels.url) leaks the webhook URL in plaintext through Terraform state
-#   and the Cloud Monitoring API, because a Slack incoming webhook URL
-#   embeds its own auth token in the path. We will add Slack in a later
-#   phase using the native type = "slack" channel, which takes an OAuth
-#   token + channel name and keeps the credential in sensitive_labels only.
-#   Until then, email is the single source of paging.
+# Slack delivery (Phase 4 follow-up). Native type = "slack" takes an
+# OAuth bot token in sensitive_labels.auth_token — stored server-side by
+# Cloud Monitoring and never round-trips through Terraform state in
+# plaintext. The channel is only provisioned when var.slack_auth_token
+# is non-empty; email stays the single source of paging when it is not
+# set. We avoid the `webhook_tokenauth` route for the reason the old
+# comment called out: a Slack incoming-webhook URL embeds its own auth
+# credential in the path and would leak through state + the Cloud
+# Monitoring API.
+resource "google_monitoring_notification_channel" "slack" {
+  count        = var.slack_auth_token != "" ? 1 : 0
+  display_name = "n8n on-call Slack"
+  type         = "slack"
+  labels = {
+    channel_name = var.slack_channel
+  }
+  sensitive_labels {
+    auth_token = var.slack_auth_token
+  }
+  force_delete = false
+}
 
 locals {
-  all_notification_channels = [google_monitoring_notification_channel.email.id]
+  all_notification_channels = concat(
+    [google_monitoring_notification_channel.email.id],
+    google_monitoring_notification_channel.slack[*].id,
+  )
 }
 
 # ------------------------------------------------------------
@@ -194,7 +209,11 @@ resource "google_logging_metric" "n8n_startup_critical" {
   filter = join(" AND ", [
     "resource.type=\"gce_instance\"",
     "logName=\"projects/${var.project_id}/logs/startup_log\"",
-    "textPayload:\"CRITICAL: n8n failed to start\"",
+    # Stable substring; the per-component detail ("n8n" / "cloudflared"
+    # / "both") is appended after an em-dash in startup.sh so this
+    # filter keeps matching regardless of which component triggered
+    # the critical path.
+    "textPayload:\"CRITICAL: startup failed\"",
   ])
   metric_descriptor {
     metric_kind  = "DELTA"
@@ -236,7 +255,58 @@ resource "google_monitoring_alert_policy" "startup_critical" {
     auto_close = "3600s"
   }
   documentation {
-    content   = "scripts/startup.sh hit the terminal 'CRITICAL: n8n failed to start' branch. ${local.runbook_url_md} §2 covers boot-loop triage."
+    content   = "scripts/startup.sh hit the terminal 'CRITICAL: startup failed' branch (either n8n, cloudflared, or both did not become healthy in 10 min; the log message names the component). ${local.runbook_url_md} §2 covers boot-loop triage."
+    mime_type = "text/markdown"
+  }
+}
+
+# ------------------------------------------------------------
+# Log-ingestion liveness (Phase 4 follow-up)
+# ------------------------------------------------------------
+# A log-based metric only emits a datapoint when matching log lines are
+# ingested. The startup_critical alert above therefore has a silent-
+# failure mode: if the Ops Agent is broken (startup.sh install is
+# non-fatal with `|| echo WARNING`), the VM can go completely offline
+# and we will never see a CRITICAL datapoint — instead of firing an
+# alert, the metric just goes quiet. This alert watches for the healthy
+# signal going missing, not for the CRITICAL signal appearing.
+#
+# The condition trips when the `startup_log` logName source has produced
+# zero entries for 24 hours, which is long enough that a legitimate
+# cold-start window (≤17m) never trips it but a missing Ops Agent does.
+# Lookback and threshold are deliberately generous — this is a last-
+# resort "observability is dead" signal, not a per-incident pager.
+resource "google_monitoring_alert_policy" "log_ingestion_absent" {
+  display_name = "n8n log ingestion absent — observability silently dead?"
+  severity     = "CRITICAL"
+  combiner     = "OR"
+  user_labels = {
+    runbook = "gcp-self-healing-infra-runbook-md"
+    scope   = "observability"
+  }
+
+  conditions {
+    display_name = "no startup_log entries ingested for 24h"
+    condition_absent {
+      filter   = "metric.type=\"logging.googleapis.com/log_entry_count\" resource.type=\"gce_instance\" metric.label.\"log\"=\"startup_log\""
+      duration = "86400s" # 24h
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "3600s"
+        per_series_aligner   = "ALIGN_RATE"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.all_notification_channels
+  alert_strategy {
+    auto_close = "86400s"
+  }
+  documentation {
+    content   = "Ops Agent is likely broken on the n8n VM — no startup_log entries have been ingested for 24h. Without log ingestion the startup_critical alert above cannot fire, which is a silent observability gap. ${local.runbook_url_md} §2 covers Ops Agent diagnosis (journalctl -u google-cloud-ops-agent)."
     mime_type = "text/markdown"
   }
 }
