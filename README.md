@@ -164,11 +164,13 @@ The Managed Instance Group is defined as `google_compute_region_instance_group_m
 
 ### Cloud SQL PITR
 
-Cloud SQL PostgreSQL runs with PITR enabled, retention 7 days (Cloud SQL default). Restore procedure: [Runbook §5.1](Runbook.md#51-cloud-sql-point-in-time-recovery). **PITR always clones to a sibling instance — we never restore in place so the original is preserved for forensics.**
+Cloud SQL PostgreSQL runs with PITR enabled, retention 7 days. Restore procedure: [Runbook §5.1](Runbook.md#51-cloud-sql-point-in-time-recovery). **PITR always clones to a sibling instance — we never restore in place so the original is preserved for forensics.**
+
+**Cloud SQL as code (opt-in, PR B).** Historically the instance was click-opsed and Terraform only knew its private IP via `var.db_host`. `terraform/cloud_sql.tf` now expresses the instance, the primary database, and the application user as resources, with `point_in_time_recovery_enabled = true`, `deletion_protection = true`, and a 7-day retention that is enforced by plan rather than trusted to the console. The toggle is **off by default** (`var.cloud_sql_managed = false`) so existing stacks remain on the var.db_host contract; flip to true only after `terraform import` — the import-safe workflow is documented in [Runbook §5.6](Runbook.md#56-cloud-sql-adoption-out-of-band--terraform).
 
 ### Terraform state rollback
 
-The GCS bucket that holds `terraform.tfstate` has **object versioning enabled** and a lifecycle rule that keeps the last 30 non-current versions for up to 90 days. Every `terraform apply` therefore produces a rollback-able snapshot of state. See [`terraform/backend.conf.example`](terraform/backend.conf.example) for the one-shot `gcloud storage buckets …` bootstrap commands, and [Runbook §5.2](Runbook.md#52-terraform-state-rollback) for the restore procedure (`gcloud storage cp gs://<bucket>/<prefix>/default.tfstate#<generation> …`).
+The GCS bucket that holds `terraform.tfstate` has **object versioning enabled** and a lifecycle rule that keeps the last 30 non-current versions for up to 90 days. Every `terraform apply` therefore produces a rollback-able snapshot of state. Bucket provisioning is itself in code — see [`terraform/bootstrap/`](terraform/bootstrap/README.md) for the one-shot module that creates the bucket with versioning + lifecycle + `prevent_destroy`, replacing the earlier manual `gcloud storage buckets ...` recipe in `backend.conf.example`. Restore procedure: [Runbook §5.2](Runbook.md#52-terraform-state-rollback).
 
 ### Secret version restore
 

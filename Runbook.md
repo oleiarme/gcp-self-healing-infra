@@ -335,6 +335,90 @@ the on-call email channel. Trigger handling:
 | 90 % | Page the on-call; identify root cause; decide whether to raise the budget or revert the change |
 | 100 % | Incident — something is actively consuming more than the Free-Tier envelope; treat as cost-incident with post-mortem |
 
+### 5.6 Cloud SQL adoption (out-of-band → Terraform)
+
+Before this section existed the PostgreSQL instance lived entirely
+outside IaC; Terraform knew only its private IP via `var.db_host`.
+`terraform/cloud_sql.tf` now declares the instance, the primary
+database, and the n8n user, gated behind `var.cloud_sql_managed`
+(default `false`).
+
+**This is a flip-then-import-then-apply procedure.** Flipping the
+toggle and running `terraform apply` without importing will make
+Terraform try to *create* a second instance with the same name — the
+API returns `ALREADY_EXISTS` and the apply fails mid-way. Running
+`terraform import` before flipping the toggle also fails: with
+`cloud_sql_managed = false` every resource has `count = 0`, so
+addresses like `google_sql_database_instance.main[0]` have no config
+to import into. The correct order:
+
+```bash
+# 0. Prerequisite: ensure the existing Cloud SQL instance has a
+#    VPC peering with servicenetworking.googleapis.com. Record its
+#    name and the VPC self-link — they feed var.cloud_sql_instance_name
+#    and var.cloud_sql_private_network below.
+INSTANCE_NAME=$(gcloud sql instances list \
+    --filter="name~n8n" --format='value(name)' \
+    --project="$PROJECT_ID")
+VPC_SELF_LINK=$(gcloud compute networks describe default \
+    --format='value(selfLink)' --project="$PROJECT_ID")
+
+# 1. Flip the toggle and set the vars to match the live instance.
+#    The resources now exist in configuration (count = 1) but are
+#    not yet in state. In .tfvars or via TF_VAR_*:
+#      cloud_sql_managed         = true
+#      cloud_sql_instance_name   = "${INSTANCE_NAME}"
+#      cloud_sql_private_network = "${VPC_SELF_LINK}"
+#      cloud_sql_tier            = "<whatever the instance currently runs>"
+#    DO NOT run terraform apply yet — it would try to create a new
+#    instance with the same name and fail (ALREADY_EXISTS).
+
+# 2. Import the three resources into Terraform state. Each is
+#    idempotent; rerunning is safe. Because count = 1 after step 1,
+#    the [0] addresses now exist in configuration.
+cd terraform
+terraform import "google_sql_database_instance.main[0]" \
+    "projects/${PROJECT_ID}/instances/${INSTANCE_NAME}"
+terraform import "google_sql_database.n8n[0]" \
+    "projects/${PROJECT_ID}/instances/${INSTANCE_NAME}/databases/postgres"
+terraform import "google_sql_user.n8n[0]" \
+    "${PROJECT_ID}/${INSTANCE_NAME}/${DB_USER}"
+
+# 3. DRY-RUN the plan. Expect:
+#      - `deletion_protection` to flip on (was false on an
+#        out-of-band-provisioned instance in most cases)
+#      - `backup_configuration.point_in_time_recovery_enabled` to
+#        flip on if PITR was previously disabled
+#      - `database_flags` to appear if slow-query logging was off
+#    Any diff outside that set is drift — investigate before apply.
+#    If the plan shows "will be created" for the instance, state is
+#    missing an import — go back to step 2.
+terraform plan
+
+# 4. Apply. Cloud SQL settings changes are applied live — no
+#    instance restart, but expect a brief (~30-60s) connectivity
+#    blip when database_flags are updated.
+terraform apply
+```
+
+**Rolling back.** If something looks wrong after import:
+
+```bash
+# Remove the resources from Terraform state without touching the
+# live instance. var.cloud_sql_managed stays true or false — the
+# state is the only thing that gets purged.
+terraform state rm "google_sql_user.n8n[0]"
+terraform state rm "google_sql_database.n8n[0]"
+terraform state rm "google_sql_database_instance.main[0]"
+# The live instance is untouched because prevent_destroy is set
+# and because `state rm` never destroys anything.
+```
+
+**After adoption is live.** Subsequent DB restore procedures still
+use [§5.1](#51-cloud-sql-point-in-time-recovery); the Terraform
+resource does not replace PITR, it only makes sure the instance
+exists with the right configuration between PITR events.
+
 ---
 
 ## 6. Escalation & On-Call
