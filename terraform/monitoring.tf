@@ -91,6 +91,13 @@ resource "google_monitoring_uptime_check_config" "n8n" {
 # Burn-rate alerts (Google SRE Workbook pattern)
 # ------------------------------------------------------------
 
+# GCP user_label values must match [a-z0-9_-]{0,63}, so the canonical
+# Runbook link goes in documentation.content (proper markdown) and
+# user_labels carry only a label-safe slug for filtering.
+locals {
+  runbook_url_md = "[Runbook](https://github.com/kwonvkim-collab/gcp-self-healing-infra/blob/main/Runbook.md)"
+}
+
 resource "google_monitoring_alert_policy" "slo_fast_burn" {
   display_name = "n8n SLO fast burn — 14.4× (2% of 28d budget / 1h)"
   severity     = "CRITICAL"
@@ -126,7 +133,7 @@ resource "google_monitoring_alert_policy" "slo_fast_burn" {
     auto_close = "1800s"
   }
   documentation {
-    content   = "n8n is burning its 28d availability error budget at >=14.4× normal rate. Consult Runbook §1 / §2 immediately."
+    content   = "n8n is burning its 28d availability error budget at >=14.4× normal rate. Consult ${local.runbook_url_md} §1 / §2 immediately."
     mime_type = "text/markdown"
   }
 }
@@ -166,7 +173,7 @@ resource "google_monitoring_alert_policy" "slo_slow_burn" {
     auto_close = "7200s"
   }
   documentation {
-    content   = "n8n has been burning its 28d availability error budget at 6× normal rate for 6h. Investigate within next business day — Runbook §1 / §2."
+    content   = "n8n has been burning its 28d availability error budget at 6× normal rate for 6h. Investigate within next business day — ${local.runbook_url_md} §1 / §2."
     mime_type = "text/markdown"
   }
 }
@@ -223,7 +230,7 @@ resource "google_monitoring_alert_policy" "startup_critical" {
     auto_close = "3600s"
   }
   documentation {
-    content   = "scripts/startup.sh hit the terminal 'CRITICAL: n8n failed to start' branch. Runbook §2 covers boot-loop triage."
+    content   = "scripts/startup.sh hit the terminal 'CRITICAL: n8n failed to start' branch. ${local.runbook_url_md} §2 covers boot-loop triage."
     mime_type = "text/markdown"
   }
 }
