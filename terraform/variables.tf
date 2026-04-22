@@ -10,9 +10,34 @@ variable "region" {
 }
 
 variable "zone" {
-  description = "GCP zone for MIG (us-central1-a for Free Tier e2-micro)"
+  description = "GCP zone for single-zone resources outside the MIG (reserved for compatibility). Since Phase 4 the MIG itself is regional and distributed across all three us-central1 zones (a/b/f)."
   type        = string
   default     = "us-central1-a"
+}
+
+# --------------------------------------------------------
+# Resilience & DR (Phase 4 of docs/slo-roadmap)
+# --------------------------------------------------------
+# Zones the regional MIG is allowed to place the single VM in. Free Tier
+# still applies: at any instant exactly one e2-micro runs, anywhere in
+# us-central1. But on a zonal incident the MIG relocates to a surviving
+# zone, which is the entire point of moving off the old single-zone
+# google_compute_instance_group_manager.
+variable "mig_zones" {
+  description = "Zones the regional MIG may place its single VM in. Must all be within var.region. For us-central1 the Free-Tier-eligible zones are a/b/f."
+  type        = list(string)
+  default     = ["us-central1-a", "us-central1-b", "us-central1-f"]
+}
+
+variable "billing_account_id" {
+  description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). Required to create the google_billing_budget. Find via `gcloud beta billing accounts list`."
+  type        = string
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly budget cap in USD for the billing account alert. Alerts fire at 50/90/100% of this amount. Defaults to $5 to keep the Free-Tier envelope narrow — any spend above this is either an escape (e.g. surprise egress) or a scaling decision that should be explicit."
+  type        = number
+  default     = 5
 }
 
 variable "db_host" {

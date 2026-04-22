@@ -26,7 +26,7 @@ gcloud logging read \
 
 # 2. Was it a one-off or recurring?
 gcloud compute instance-groups managed list-instance-events n8n-mig \
-  --zone=us-central1-a \
+  --region=us-central1 \
   --project=$PROJECT_ID
 
 # 3. Check logs from the crashed VM
@@ -109,9 +109,9 @@ initial_delay_sec = 2400  # 40 min — only for debugging boot-loop
 2. Force MIG to recreate current VM:
 ```bash
 gcloud compute instance-groups managed recreate-instances n8n-mig \
-  --zone=us-central1-a \
+  --region=us-central1 \
   --instances=$(gcloud compute instance-groups managed list-instances n8n-mig \
-    --zone=us-central1-a --format="value(instance)") \
+    --region=us-central1 --format="value(instance)") \
   --project=$PROJECT_ID
 ```
 
@@ -144,9 +144,9 @@ echo -n "$NEW_VALUE" | gcloud secrets versions add $SECRET_NAME \
 # 2. Trigger VM restart to pick up new secret
 # (new VM will fetch latest version; existing VM needs restart)
 gcloud compute instance-groups managed recreate-instances n8n-mig \
-  --zone=us-central1-a \
+  --region=us-central1 \
   --instances=$(gcloud compute instance-groups managed list-instances n8n-mig \
-    --zone=us-central1-a --format="value(instance)") \
+    --region=us-central1 --format="value(instance)") \
   --project=$PROJECT_ID
 
 # 3. Verify new VM started with new secret
@@ -176,7 +176,7 @@ gcloud secrets versions access latest --secret=n8n-encryption-key --project=$PRO
 ```bash
 # Watch MIG events during deploy
 gcloud compute instance-groups managed list-instance-events n8n-mig \
-  --zone=us-central1-a \
+  --region=us-central1 \
   --project=$PROJECT_ID
 
 # Check new VM is healthy
@@ -194,6 +194,149 @@ done
 
 ---
 
+## 5. Backup & DR
+
+Incident archetypes covered here: *data loss* (Cloud SQL row-level corruption,
+accidental `DROP TABLE` via n8n workflow), *state loss* (a bad `terraform apply`
+destroyed the wrong resource), *secret loss* (an on-call rotated a secret and
+broke production), and *zonal outage* (whole zone goes dark in the region).
+Phase 4 of [`docs/slo-roadmap.md`](docs/slo-roadmap.md).
+
+### 5.1 Cloud SQL Point-In-Time Recovery
+
+Cloud SQL PostgreSQL runs with **PITR enabled**; retention is the Cloud SQL
+default (7 days) unless explicitly overridden. PITR uses transaction log
+archival under the hood — you can restore to any second within the retention
+window, not just to a backup boundary.
+
+```bash
+# 1. Identify the instance and the exact restore timestamp (UTC, ISO 8601).
+INSTANCE=$(gcloud sql instances list --filter="name~n8n" --format='value(name)' --project="$PROJECT_ID")
+TS="2026-01-15T14:32:00Z"   # one second before the bad change
+
+# 2. Clone to a SIBLING instance. Never restore in place — we want the
+#    original around for forensics.
+gcloud sql instances clone "$INSTANCE" "${INSTANCE}-restore-$(date -u +%Y%m%dT%H%M%S)" \
+    --point-in-time="$TS" \
+    --project="$PROJECT_ID"
+
+# 3. Point n8n at the restored instance by updating var.db_host and running
+#    terraform apply. The MIG will roll the VM through a new instance
+#    template; the update_policy forces a full replace so the startup.sh
+#    bootstrap re-reads Secret Manager cleanly.
+
+# 4. After verifying n8n on the restored data, you can retire the old
+#    instance. Until then keep both alive for root-cause analysis.
+```
+
+**Trigger matrix for using PITR:**
+
+| Symptom | PITR appropriate? |
+|---|---|
+| n8n workflow deleted rows via a bug | yes — restore to 1s before |
+| n8n container crash loop | no — fix startup.sh, don't restore data |
+| CloudSQL instance deleted | yes, if within 7 days — otherwise unrecoverable |
+| Rogue admin issued `DROP DATABASE` | yes, assuming you catch it within 7 days |
+
+### 5.2 Terraform state rollback
+
+Every `terraform apply` writes a new generation of
+`gs://<bucket>/<prefix>/default.tfstate` because the GCS state bucket has
+object versioning enabled (see `terraform/backend.conf.example` for the
+one-shot bucket configuration). To rollback:
+
+```bash
+BUCKET=<project-id>-tfstate
+PREFIX=n8n-self-healing
+
+# 1. List generations ordered newest → oldest.
+gcloud storage ls --versions "gs://${BUCKET}/${PREFIX}/default.tfstate"
+
+# 2. Inspect the generation you want to restore (optional).
+gcloud storage cp "gs://${BUCKET}/${PREFIX}/default.tfstate#<generation>" - \
+    | jq '.resources[].name' | sort
+
+# 3. Restore that generation as the new live version.
+gcloud storage cp "gs://${BUCKET}/${PREFIX}/default.tfstate#<generation>" \
+    "gs://${BUCKET}/${PREFIX}/default.tfstate"
+
+# 4. Immediately run `terraform plan` from a checkout pinned to the
+#    corresponding git SHA to verify the rollback matches code intent.
+#    Any drift here is a real incident.
+```
+
+**Prerequisite:** the state bucket must have versioning enabled. If it
+was bootstrapped without versioning, older generations are gone and this
+procedure cannot recover them. Fix the bucket (`gcloud storage buckets
+update --versioning`) before the next `terraform apply` so we never lose
+this safety net again.
+
+### 5.3 Secret version restore
+
+Each Secret Manager secret keeps every version we've ever set. If a
+rotation broke production:
+
+```bash
+# 1. Find the version that was live before the bad rotation.
+gcloud secrets versions list n8n-encryption-key --project="$PROJECT_ID"
+
+# 2. Disable the bad version and re-enable the previous one.
+gcloud secrets versions disable  <bad_version>      --secret=n8n-encryption-key --project="$PROJECT_ID"
+gcloud secrets versions enable   <previous_version> --secret=n8n-encryption-key --project="$PROJECT_ID"
+
+# 3. Force a fresh VM so startup.sh re-reads the secret.
+gcloud compute instance-groups managed recreate-instances n8n-mig \
+    --region="$REGION" \
+    --instances=$(gcloud compute instance-groups managed list-instances n8n-mig \
+                      --region="$REGION" \
+                      --project="$PROJECT_ID" \
+                      --format='value(instance)') \
+    --project="$PROJECT_ID"
+```
+
+The `prevent_destroy` lifecycle on each `google_secret_manager_secret`
+(Phase 3) ensures the secret *resource* can't be wiped by `terraform
+destroy` — but individual versions are always disposable via the CLI
+above.
+
+### 5.4 Zonal outage
+
+Since Phase 4 the MIG is regional (`google_compute_region_instance_group_manager`)
+and its `distribution_policy_zones` spans every Free-Tier-eligible zone
+in `us-central1` (`a`, `b`, `f`). During a zonal incident:
+
+1. Autohealing detects the unhealthy VM via the GCP health check (same
+   policy as the in-zone case, ~50s detection).
+2. MIG attempts to create a replacement in a surviving zone. Because
+   `target_size = 1`, there is no scheduling contention.
+3. `startup.sh` runs end-to-end on the new VM (~6 min cold), which
+   dominates the recovery-time budget.
+
+Expected zonal-failover MTTR ≈ in-zone cold MTTR ≈ **17 min worst-case**.
+If a zonal incident lasts beyond the SLO's hourly fast-burn window, the
+fast-burn alert will fire (same mechanism as any other uptime incident).
+
+**What this does NOT cover:** a full `us-central1` region outage. The
+stack is still single-region; recovering from a region loss requires
+either a pre-provisioned standby in another region (out of Free Tier)
+or restoring Cloud SQL + re-applying Terraform in a fresh project
+pointing at a different region. That is an accepted risk for this
+repo's Free-Tier cost envelope.
+
+### 5.5 Billing budget alert
+
+The monthly-cap `google_billing_budget` (Phase 4, see `main.tf`) sends
+alerts at 50 / 90 / 100 % of `var.monthly_budget_usd` (default $5) to
+the on-call email channel. Trigger handling:
+
+| Threshold | Action |
+|---|---|
+| 50 % | Acknowledge; investigate if spend jumped outside normal (egress spike, scaling change) |
+| 90 % | Page the on-call; identify root cause; decide whether to raise the budget or revert the change |
+| 100 % | Incident — something is actively consuming more than the Free-Tier envelope; treat as cost-incident with post-mortem |
+
+---
+
 ## Quick Reference
 
 | Command | When |
@@ -201,6 +344,9 @@ done
 | `docker compose ps` | Check container status |
 | `docker compose logs n8n --tail=50` | n8n errors |
 | `cat /var/log/startup.log` | Full startup trace |
-| `gcloud compute instance-groups managed list-instance-events n8n-mig --zone=us-central1-a` | MIG events (recreates) |
+| `gcloud compute instance-groups managed list-instance-events n8n-mig --region=us-central1` | MIG events (recreates) — regional since Phase 4 |
 | `gcloud logging read 'logName:"startup"' --limit=20` | Recent startups |
 | `curl -sf http://localhost:5678/healthz` | Health check locally |
+| `gcloud storage ls --versions "gs://<bucket>/<prefix>/default.tfstate"` | List Terraform state generations (rollback) |
+| `gcloud secrets versions list <secret-id>` | List secret versions (rotation rollback) |
+| `gcloud sql instances clone <inst> <inst>-restore --point-in-time=<ts>` | Cloud SQL PITR clone |
