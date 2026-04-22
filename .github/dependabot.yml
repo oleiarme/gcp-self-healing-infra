@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # GitHub Actions ----------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    # All Actions in this repo are tagged by major version (`@v4` etc.) but
+    # we still want Dependabot to PR minor + patch bumps in case of CVE
+    # fixes. Group them so we get one PR per week, not one per action.
+    groups:
+      ci-actions:
+        patterns:
+          - "*"
+
+  # Container images shipped on the VM via scripts/startup.sh ---------------
+  # We do NOT have a Dockerfile, but Dependabot's docker ecosystem can also
+  # bump images referenced inside terraform variable defaults. The variables
+  # n8n_image and cloudflared_image hold "<image>:<tag>@sha256:<digest>" so
+  # Dependabot will keep the digests fresh as upstream releases new tags.
+  - package-ecosystem: docker
+    directory: "/terraform"
+    schedule:
+      interval: weekly
+      day: monday

@@ -13,6 +13,11 @@ concurrency:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    # GitHub Environment "production" is the deploy approval gate. Configure
+    # it under Settings → Environments → production with at least one
+    # required reviewer (and ideally a wait timer + branch restriction to
+    # `main`). All `terraform apply` runs go through this human approval.
+    environment: production
     defaults:
       run:
         working-directory: ./terraform # Все команды будут выполняться здесь
