@@ -119,19 +119,23 @@ services:
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: true
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
-      interval: 60s
-      timeout: 15s
-      retries: 10
-      start_period: 420s
+      healthcheck:
+        test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
+        # 10s — matches GCP health check check_interval_sec (main.tf).
+        # GCP probes every 10s. If Docker also checks every 10s → no stale
+        # health state. Previous 60s interval meant GCP could read healthy
+        # status while n8n was already dead for up to 50s.
+        interval: 10s
+        timeout: 15s
+        retries: 10
+        start_period: 420s
 
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
     restart: unless-stopped
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
-      TUNNEL_TOKEN: \$CF_TOKEN    
+      TUNNEL_TOKEN: \$CF_TOKEN
 EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
