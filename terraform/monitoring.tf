@@ -109,17 +109,22 @@ resource "google_monitoring_alert_policy" "slo_fast_burn" {
   }
 
   conditions {
-    display_name = "good-fraction < 0.928 over 1h"
+    display_name = "good-fraction < 0.928 over sliding 1h"
     condition_monitoring_query_language {
       duration = "0s"
-      query    = <<-MQL
+      # Sliding 1h window: align fraction_true(1h) produces one point per
+      # alignment period (default 1m) whose value is the fraction of `true`
+      # samples over the preceding 1h. Detection lag ≤ 1m, matching the
+      # SRE Workbook multi-window/multi-burn-rate expectation. A previous
+      # revision used `group_by 1h` which builds tumbling wall-clock
+      # windows and can delay detection by up to ~59m.
+      query = <<-MQL
         fetch uptime_url
         | metric 'monitoring.googleapis.com/uptime_check/check_passed'
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | align fraction_true(1m)
-        | group_by 1h, [good_fraction: mean(value.check_passed)]
+        | align fraction_true(1h)
         | condition val() < 0.928
       MQL
       trigger {
@@ -149,17 +154,18 @@ resource "google_monitoring_alert_policy" "slo_slow_burn" {
   }
 
   conditions {
-    display_name = "good-fraction < 0.97 over 6h"
+    display_name = "good-fraction < 0.97 over sliding 6h"
     condition_monitoring_query_language {
       duration = "0s"
-      query    = <<-MQL
+      # Sliding 6h window: see comment on slo_fast_burn. Detection lag ≤ 1m
+      # instead of up to ~5h59m for a tumbling `group_by 6h`.
+      query = <<-MQL
         fetch uptime_url
         | metric 'monitoring.googleapis.com/uptime_check/check_passed'
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | align fraction_true(1m)
-        | group_by 6h, [good_fraction: mean(value.check_passed)]
+        | align fraction_true(6h)
         | condition val() < 0.97
       MQL
       trigger {
