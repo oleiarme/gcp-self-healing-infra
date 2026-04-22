@@ -136,7 +136,7 @@ resource "google_monitoring_alert_policy" "slo_slow_burn" {
   severity     = "WARNING"
   combiner     = "OR"
   user_labels = {
-    runbook = "https://github.com/kwonvkim-collab/gcp-self-healing-infra/blob/main/Runbook.md"
+    runbook = "gcp-self-healing-infra-runbook-md"
     slo     = "availability-99-5-28d"
     window  = "6h"
   }
