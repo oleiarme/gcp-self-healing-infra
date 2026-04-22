@@ -28,6 +28,17 @@ resource "google_project_service" "required" {
     "monitoring.googleapis.com",
     # Phase 4: google_billing_budget goes through the billingbudgets API.
     "billingbudgets.googleapis.com",
+    # Phase 4 / PR B: google_sql_database_instance needs the Cloud SQL
+    # Admin API. Enabling it unconditionally (not gated on
+    # var.cloud_sql_managed) is cheap — the API has no per-enable cost —
+    # and avoids a two-step apply when flipping the toggle.
+    "sqladmin.googleapis.com",
+    # Phase 4 / PR B: Cloud SQL private IP requires a VPC peering with
+    # the Service Networking API. Enabling the API here still leaves
+    # peering as an out-of-band step (same as var.db_host assumption),
+    # but makes the private IP creation path work once peering is in
+    # place.
+    "servicenetworking.googleapis.com",
   ])
 
   service = each.key
@@ -291,7 +302,7 @@ resource "google_compute_instance_template" "tpl" {
     # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
     block-project-ssh-keys = "true"
     startup-script = templatefile("${path.module}/../scripts/startup.sh", {
-      db_host               = var.db_host
+      db_host               = local.effective_db_host
       db_user               = var.db_user
       DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
       N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
@@ -305,6 +316,19 @@ resource "google_compute_instance_template" "tpl" {
 
   lifecycle {
     create_before_destroy = true
+
+    # PR B guardrail: fail plan if the VM template would be rendered
+    # with an empty DB host. Either var.cloud_sql_managed must be true
+    # (and the managed instance will produce a private_ip_address) or
+    # var.db_host must be non-empty (out-of-band contract). An empty
+    # local.effective_db_host silently renders DB_POSTGRESDB_HOST=""
+    # into docker-compose.yml, producing an opaque n8n connect error
+    # after the VM boots — much harder to diagnose than a failing
+    # plan.
+    precondition {
+      condition     = local.effective_db_host != ""
+      error_message = "Either set var.cloud_sql_managed = true (and import the existing instance per terraform/cloud_sql.tf) or provide var.db_host for the out-of-band Cloud SQL instance."
+    }
   }
 }
 

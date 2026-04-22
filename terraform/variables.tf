@@ -42,9 +42,75 @@ variable "monthly_budget_usd" {
 }
 
 variable "db_host" {
-  description = "Cloud SQL private IP address"
+  description = "Cloud SQL private IP address. Required when var.cloud_sql_managed is false (out-of-band DB); ignored when var.cloud_sql_managed is true (Terraform reads the private IP from the managed google_sql_database_instance instead)."
   type        = string
   sensitive   = false
+  default     = ""
+}
+
+# --------------------------------------------------------
+# Cloud SQL as code (Phase 4 / PR B)
+# --------------------------------------------------------
+# All of these only take effect when cloud_sql_managed = true.
+# Keeping them declared so operators can set them preemptively
+# before flipping the toggle without a second plan/apply round.
+
+variable "cloud_sql_managed" {
+  description = "Opt-in: manage the PostgreSQL Cloud SQL instance via Terraform. Defaults to false so existing stacks are unaffected. See terraform/cloud_sql.tf for the import-safe workflow before flipping this to true against an existing instance."
+  type        = bool
+  default     = false
+}
+
+variable "cloud_sql_instance_name" {
+  description = "Cloud SQL instance name. Must match the existing instance's name when adopting an out-of-band DB via terraform import."
+  type        = string
+  default     = "n8n-postgres"
+}
+
+variable "cloud_sql_database_version" {
+  description = "Cloud SQL PostgreSQL major version string (e.g. 'POSTGRES_15'). Must match the existing instance when importing."
+  type        = string
+  default     = "POSTGRES_15"
+}
+
+variable "cloud_sql_tier" {
+  description = "Cloud SQL machine type. 'db-f1-micro' stays inside Cloud SQL free tier; upgrade to 'db-custom-1-3840' or larger if n8n job load outgrows it."
+  type        = string
+  default     = "db-f1-micro"
+}
+
+variable "cloud_sql_availability_type" {
+  description = "'ZONAL' (single zone, cheaper) or 'REGIONAL' (synchronous standby, HA — leaves Free Tier). Phase 4 keeps ZONAL consistent with the single-VM MIG topology."
+  type        = string
+  default     = "ZONAL"
+
+  validation {
+    condition     = contains(["ZONAL", "REGIONAL"], var.cloud_sql_availability_type)
+    error_message = "cloud_sql_availability_type must be either ZONAL or REGIONAL."
+  }
+}
+
+variable "cloud_sql_disk_size_gb" {
+  description = "Cloud SQL persistent disk size in GB. disk_autoresize is enabled; this is the starting size."
+  type        = number
+  default     = 10
+}
+
+variable "cloud_sql_pitr_retention_days" {
+  description = "Days of point-in-time-recovery transaction log retention AND number of automatic backups kept. Cloud SQL allows 1-7."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.cloud_sql_pitr_retention_days >= 1 && var.cloud_sql_pitr_retention_days <= 7
+    error_message = "cloud_sql_pitr_retention_days must be between 1 and 7 (Cloud SQL API limit)."
+  }
+}
+
+variable "cloud_sql_private_network" {
+  description = "VPC network self-link (projects/PROJECT/global/networks/NAME) that is peered with servicenetworking.googleapis.com for the Cloud SQL private IP. Must exist before apply when cloud_sql_managed is true."
+  type        = string
+  default     = ""
 }
 
 variable "db_user" {

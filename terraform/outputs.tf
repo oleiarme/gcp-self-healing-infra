@@ -99,6 +99,27 @@ output "wif_live_attribute_condition" {
   value       = local.wif_enforcement_enabled ? data.google_iam_workload_identity_pool_provider.github[0].attribute_condition : null
 }
 
+# Cloud SQL (Phase 4 / PR B)
+output "cloud_sql_instance_name" {
+  description = "Name of the Terraform-managed Cloud SQL instance. Null when var.cloud_sql_managed is false (out-of-band DB)."
+  value       = length(google_sql_database_instance.main) > 0 ? google_sql_database_instance.main[0].name : null
+}
+
+output "cloud_sql_connection_name" {
+  description = "Cloud SQL connection name (project:region:instance) for the managed instance. Use with the Cloud SQL Auth Proxy. Null when var.cloud_sql_managed is false."
+  value       = length(google_sql_database_instance.main) > 0 ? google_sql_database_instance.main[0].connection_name : null
+}
+
+output "cloud_sql_private_ip" {
+  description = "Private IP address the VM uses to reach the managed Cloud SQL instance. Null when var.cloud_sql_managed is false (in that case var.db_host is used verbatim)."
+  value       = length(google_sql_database_instance.main) > 0 ? google_sql_database_instance.main[0].private_ip_address : null
+}
+
+output "effective_db_host" {
+  description = "Actual DB host string rendered into the VM's docker-compose.yml. Equal to cloud_sql_private_ip when managed, else var.db_host. Useful for debugging 'n8n can't reach the DB' incidents: if this output is empty the lifecycle.precondition on google_compute_instance_template.tpl (main.tf) will have failed plan already."
+  value       = local.effective_db_host
+}
+
 # Resilience & DR (Phase 4)
 output "billing_budget_name" {
   description = "Resource name of the monthly spend cap billing budget. Null when var.billing_account_id is empty (budget opted out). Edit the thresholds / amount by changing var.monthly_budget_usd and re-applying."
