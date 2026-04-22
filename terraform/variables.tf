@@ -71,12 +71,18 @@ variable "oncall_email" {
 # --------------------------------------------------------
 # Both images are pinned by SHA256 digest in addition to the human-readable
 # tag, so a re-issued tag (e.g. cloudflared rebuilds the same tag with new
-# layers) cannot silently change what runs on the VM. Dependabot
-# (.github/dependabot.yml) keeps both digests fresh.
+# layers) cannot silently change what runs on the VM.
 #
-# To refresh a digest manually:
-#   docker buildx imagetools inspect <image>:<tag>     # local docker
+# Digests are refreshed by .github/workflows/digest-refresh.yml (weekly
+# cron + manual dispatch). That workflow uses `crane digest` to resolve
+# each image, runs `terraform validate`, and opens a review PR via
+# peter-evans/create-pull-request when either digest has moved.
+#
+# To refresh manually from a checkout:
+#   bash scripts/refresh-digests.sh          # bumps in-place + exit 0
+# Or resolve the digest by hand:
 #   crane digest <image>:<tag>                         # crane CLI
+#   docker buildx imagetools inspect <image>:<tag>     # local docker
 #   curl -sI -H "Accept: application/vnd.oci.image.index.v1+json" \
 #        https://<registry>/v2/<repo>/manifests/<tag>  # registry HTTP API
 
