@@ -9,6 +9,7 @@ on:
     paths:
       - 'terraform/**'
       - 'scripts/**'
+      - 'docs/drills/**'
       - '.github/workflows/terraform.yml'
 
 jobs:
@@ -45,7 +46,7 @@ jobs:
         # SC2154 suppressed: startup.sh is a Terraform templatefile and the
         # ${db_host}/${db_user} refs are Terraform interpolations, not shell
         # variables. SC2086 suppressed for gcloud retry patterns.
-        run: shellcheck --severity=warning --exclude=SC2154,SC2086 scripts/*.sh
+        run: shellcheck --severity=warning --exclude=SC2154,SC2086 scripts/*.sh docs/drills/*.sh
 
   tflint:
     name: tflint
