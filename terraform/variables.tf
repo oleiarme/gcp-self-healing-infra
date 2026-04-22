@@ -44,3 +44,24 @@ variable "CF_TUNNEL_TOKEN" {
   type        = string
   sensitive   = true
 }
+
+# --------------------------------------------------------
+# Observability (Phase 2 of docs/slo-roadmap)
+# --------------------------------------------------------
+
+variable "n8n_public_host" {
+  description = "Public FQDN of the n8n deployment (no scheme, no path). Probed by the SLI uptime check on https://<host>/healthz. Example: 'n8n.example.com'."
+  type        = string
+}
+
+variable "oncall_email" {
+  description = "Email address that receives SLO burn-rate and startup-CRITICAL alerts."
+  type        = string
+}
+
+variable "slack_webhook_url" {
+  description = "Optional Slack webhook URL for P2 alerts. Leave empty to disable the Slack channel."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
