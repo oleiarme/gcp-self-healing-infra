@@ -2,19 +2,22 @@ name: terraform-validate
 
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+      - 'docs/**'
+      - 'phase-**'
     paths:
       - 'terraform/**'
       - 'scripts/**'
+      - '.github/workflows/terraform.yml'
 
 jobs:
-  validate:
-    name: Validate & Lint
+  terraform:
+    name: Terraform validate & fmt
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./terraform
-
     steps:
       - uses: actions/checkout@v4
 
@@ -31,3 +34,15 @@ jobs:
       # Fails if any .tf file is not formatted
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
+
+  shellcheck:
+    name: Shellcheck scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        # SC2154 suppressed: startup.sh is a Terraform templatefile and the
+        # ${db_host}/${db_user} refs are Terraform interpolations, not shell
+        # variables. SC2086 suppressed for gcloud retry patterns.
+        run: shellcheck --severity=warning --exclude=SC2154,SC2086 scripts/*.sh
