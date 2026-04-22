@@ -170,15 +170,15 @@ Defined as code in `terraform/monitoring.tf` and `terraform/dashboards.tf`.
 
 | Policy | Signal | Burn rate | Trigger | Severity | Channels |
 |---|---|---|---|---|---|
-| `n8n SLO fast burn` | uptime good-fraction < 0.928 over **1h** | 14.4× (2% of 28d budget / 1h) | within 1h window | **CRITICAL** | email + Slack (if configured) |
-| `n8n SLO slow burn` | uptime good-fraction < 0.97 over **6h** | 6× (5% of 28d budget / 6h) | within 6h window | WARNING | email + Slack |
-| `n8n startup script CRITICAL` | log-based metric `n8n/startup_critical` > 0 in 5m | n/a | 1 event | WARNING | email + Slack |
+| `n8n SLO fast burn` | uptime good-fraction < 0.928 over **1h** | 14.4× (2% of 28d budget / 1h) | within 1h window | **CRITICAL** | email |
+| `n8n SLO slow burn` | uptime good-fraction < 0.97 over **6h** | 6× (5% of 28d budget / 6h) | within 6h window | WARNING | email |
+| `n8n startup script CRITICAL` | log-based metric `n8n/startup_critical` > 0 in 5m | n/a | 1 event | WARNING | email |
 
 All alert policies carry a `runbook` user-label that deep-links to `Runbook.md` so the on-call engineer lands on the triage page directly from the alert.
 
 ### Notification channels
 - `TF_VAR_oncall_email` — required. Primary on-call email.
-- `TF_VAR_slack_webhook_url` — optional. When empty the Slack channel is not provisioned.
+- **Slack** — intentionally deferred. A Slack incoming-webhook URL embeds its own auth token in the path, which would leak through Terraform state and the Cloud Monitoring API if plumbed into a `webhook_tokenauth` channel. Slack delivery will be added in a later phase using the native `type = "slack"` channel with an OAuth token held in `sensitive_labels`.
 
 ### Log ingestion
 `scripts/startup.sh` installs the Ops Agent with a deliberately **logging-only** config (`/etc/google-cloud-ops-agent/config.yaml`). Host- and process-metrics receivers are off — they exceeded the e2-micro IO budget historically (commit `del ops agent not enouth io`). The single tail receiver on `/var/log/startup.log` is what feeds the `n8n/startup_critical` log-based metric.

@@ -59,9 +59,9 @@ variable "oncall_email" {
   type        = string
 }
 
-variable "slack_webhook_url" {
-  description = "Optional Slack webhook URL for P2 alerts. Leave empty to disable the Slack channel."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
+# NOTE: TF_VAR_slack_webhook_url is intentionally NOT wired in this phase.
+# A Slack incoming webhook URL is itself the auth credential, so stuffing
+# it into a google_monitoring_notification_channel "webhook_tokenauth"
+# labels.url leaks the secret through Terraform state and the Cloud
+# Monitoring API. Slack delivery will be added in a later phase using the
+# native type = "slack" channel with an OAuth token in sensitive_labels.

@@ -113,9 +113,16 @@ metrics:
     pipelines: {}
 EOF
 
-retry curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
-retry bash add-google-cloud-ops-agent-repo.sh --also-install
-systemctl enable --now google-cloud-ops-agent
+# Ops Agent install is non-fatal: the agent is an observability aid, not
+# an application dependency, and must never boot-loop the VM on transient
+# apt or network errors. `set -e` is suppressed for this block only; any
+# failure is logged as a WARNING and the rest of the script continues so
+# the n8n container still starts and the GCP health check stays green.
+{
+  retry curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh &&
+    retry bash add-google-cloud-ops-agent-repo.sh --also-install &&
+    systemctl enable --now google-cloud-ops-agent
+} || echo "⚠️ WARNING: Ops Agent install failed — continuing without structured log ingestion."
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n

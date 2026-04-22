@@ -36,24 +36,18 @@ resource "google_monitoring_notification_channel" "email" {
   force_delete = false
 }
 
-resource "google_monitoring_notification_channel" "slack" {
-  count        = var.slack_webhook_url == "" ? 0 : 1
-  display_name = "n8n on-call Slack"
-  type         = "webhook_tokenauth"
-  labels = {
-    url = var.slack_webhook_url
-  }
-  sensitive_labels {
-    auth_token = var.slack_webhook_url
-  }
-  force_delete = false
-}
+# NOTE on Slack delivery:
+#   Slack delivery is intentionally not provisioned in this phase. The
+#   obvious route (type = "webhook_tokenauth" with var.slack_webhook_url in
+#   labels.url) leaks the webhook URL in plaintext through Terraform state
+#   and the Cloud Monitoring API, because a Slack incoming webhook URL
+#   embeds its own auth token in the path. We will add Slack in a later
+#   phase using the native type = "slack" channel, which takes an OAuth
+#   token + channel name and keeps the credential in sensitive_labels only.
+#   Until then, email is the single source of paging.
 
 locals {
-  all_notification_channels = concat(
-    [google_monitoring_notification_channel.email.id],
-    google_monitoring_notification_channel.slack[*].id,
-  )
+  all_notification_channels = [google_monitoring_notification_channel.email.id]
 }
 
 # ------------------------------------------------------------
