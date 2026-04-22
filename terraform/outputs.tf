@@ -46,3 +46,29 @@ output "deployment_timestamp" {
   description = "Terraform apply timestamp — use for change correlation"
   value       = timestamp()
 }
+
+# Observability (Phase 2) — IDs needed for Runbook links and dashboard URLs
+output "uptime_check_id" {
+  description = "Uptime check identifier that is the SLI source for SLO burn-rate alerts"
+  value       = google_monitoring_uptime_check_config.n8n.uptime_check_id
+}
+
+output "alert_policy_fast_burn" {
+  description = "Fast-burn SLO alert policy resource name (use to link in Runbook / PagerDuty)"
+  value       = google_monitoring_alert_policy.slo_fast_burn.name
+}
+
+output "alert_policy_slow_burn" {
+  description = "Slow-burn SLO alert policy resource name"
+  value       = google_monitoring_alert_policy.slo_slow_burn.name
+}
+
+output "alert_policy_startup_critical" {
+  description = "Startup-CRITICAL log-based alert policy resource name"
+  value       = google_monitoring_alert_policy.startup_critical.name
+}
+
+output "dashboard_id" {
+  description = "Cloud Monitoring dashboard resource name for the n8n SLO dashboard"
+  value       = google_monitoring_dashboard.n8n_slo.id
+}

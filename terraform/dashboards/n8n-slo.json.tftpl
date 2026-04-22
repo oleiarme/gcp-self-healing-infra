@@ -1,0 +1,116 @@
+{
+  "displayName": "n8n — SLO & reliability",
+  "mosaicLayout": {
+    "columns": 12,
+    "tiles": [
+      {
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Uptime /healthz (ratio, all probe locations)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(1m)\n| group_by 1m, [good_fraction: mean(value.check_passed)]"
+                },
+                "plotType": "LINE"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR",
+              "label": "good fraction (0–1)"
+            },
+            "thresholds": [
+              { "value": 0.995, "color": "YELLOW" },
+              { "value": 0.97, "color": "RED" }
+            ]
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Burn rate — 1h window (fast) vs 6h window (slow)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(1m)\n| group_by 1h, [bad_fraction_1h: 1 - mean(value.check_passed)]\n| value [burn_rate_1h: val() / 0.005]"
+                },
+                "plotType": "LINE",
+                "legendTemplate": "fast (1h)"
+              },
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(1m)\n| group_by 6h, [bad_fraction_6h: 1 - mean(value.check_passed)]\n| value [burn_rate_6h: val() / 0.005]"
+                },
+                "plotType": "LINE",
+                "legendTemplate": "slow (6h)"
+              }
+            ],
+            "yAxis": { "scale": "LINEAR", "label": "× normal burn rate" },
+            "thresholds": [
+              { "value": 14.4, "color": "RED" },
+              { "value": 6, "color": "YELLOW" }
+            ]
+          }
+        }
+      },
+      {
+        "yPos": 4,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "n8n MIG instance count",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"compute.googleapis.com/instance_group/size\" resource.type=\"instance_group\" metadata.system_labels.\"instance_group_name\"=\"${mig_name}\"",
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    }
+                  }
+                },
+                "plotType": "STACKED_AREA"
+              }
+            ],
+            "yAxis": { "scale": "LINEAR", "label": "VMs" }
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 4,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Startup script CRITICAL events (log-based metric)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/${log_metric}\" resource.type=\"gce_instance\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_SUM",
+                      "crossSeriesReducer": "REDUCE_SUM"
+                    }
+                  }
+                },
+                "plotType": "STACKED_BAR"
+              }
+            ],
+            "yAxis": { "scale": "LINEAR", "label": "events / 5m" }
+          }
+        }
+      }
+    ]
+  }
+}
