@@ -81,15 +81,26 @@ output "dashboard_id" {
 # Security posture (Phase 3) — emit the canonical WIF attribute condition so
 # an operator can copy-paste it into `gcloud iam workload-identity-pools
 # providers update-oidc …`. The WIF pool itself lives out-of-band (one-shot
-# bootstrap) so Terraform cannot enforce this, but surfacing the expected
-# condition keeps the source of truth in this repo.
+# bootstrap) so Terraform cannot enforce this by default, but surfacing the
+# expected condition keeps the source of truth in this repo.
 output "wif_attribute_condition" {
   description = "Required attribute_condition on the WIF OIDC provider that GitHub Actions assumes. Paste into `gcloud iam workload-identity-pools providers update-oidc`."
-  value       = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
+  value       = local.wif_expected_condition
+}
+
+# Phase 4 follow-up — surface the live attribute_condition when the
+# optional enforcement data source is active (var.wif_pool_id /
+# var.wif_provider_id both set). Also pins the data source to an actual
+# consumer so tflint does not report it as unused; the postcondition on
+# the data source itself is where the real drift detection happens. When
+# enforcement is disabled, this is null.
+output "wif_live_attribute_condition" {
+  description = "Live attribute_condition read from the WIF provider when optional enforcement is enabled; null otherwise. Diverging from wif_attribute_condition means drift — the same check runs as a postcondition during plan."
+  value       = local.wif_enforcement_enabled ? data.google_iam_workload_identity_pool_provider.github[0].attribute_condition : null
 }
 
 # Resilience & DR (Phase 4)
 output "billing_budget_name" {
-  description = "Resource name of the monthly spend cap billing budget. Edit the thresholds / amount by changing var.monthly_budget_usd and re-applying."
-  value       = google_billing_budget.monthly_cap.name
+  description = "Resource name of the monthly spend cap billing budget. Null when var.billing_account_id is empty (budget opted out). Edit the thresholds / amount by changing var.monthly_budget_usd and re-applying."
+  value       = length(google_billing_budget.monthly_cap) > 0 ? google_billing_budget.monthly_cap[0].name : null
 }

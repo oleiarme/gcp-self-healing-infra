@@ -337,6 +337,78 @@ the on-call email channel. Trigger handling:
 
 ---
 
+## 6. Escalation & On-Call
+
+> The **roster** (who gets paged this week) lives in
+> [`docs/oncall.md`](docs/oncall.md). This chapter covers the **paging
+> rules**: which signal maps to which severity, what the SLAs are, and
+> when an alert triggers a post-mortem. Notification channel wiring is
+> in `terraform/monitoring.tf`.
+
+### 6.1 Severity matrix
+
+| Severity | Signal source | Ack SLA | Resolve SLA | Primary channel |
+|---|---|---|---|---|
+| **P1** | `slo_fast_burn` (14.4×), `startup_critical`, `log_ingestion_absent` | 15 min | 2 h | PagerDuty → primary phone |
+| **P2** | `slo_slow_burn` (6×), repeated `startup_critical` within 24h, `monthly_cap` budget 90 % | 1 h | 8 h | Slack `#n8n-ops` |
+| **P3** | Single startup failure, one-off uptime blip, `monthly_cap` budget 50 % | next business day | 72 h | GitHub issue |
+
+Escalation on ack-SLA miss: 1× → backup on-call, 2× → engineering manager.
+
+### 6.2 Triage checklist (valid for every P1)
+
+Run these in order. Stop at the first procedure that gives a healthy
+signal — then file the rest as appendix evidence in the post-mortem.
+
+1. Ack the page. Open the alert in Cloud Monitoring; note the policy
+   display name, the exact time it fired, and its `documentation.content`
+   (every policy points at the relevant Runbook section).
+2. Confirm scope: does the external uptime check still see the site?
+   `gcloud monitoring uptime list-configs` + the dashboard linked in
+   `terraform/outputs.tf.dashboard_id`.
+3. Triage by policy:
+   - `slo_fast_burn` / `slo_slow_burn` → §1 (MIG recreation) and §2
+     (startup timeout) are the usual culprits.
+   - `startup_critical` → §2 directly; the metric's log filter already
+     identifies the VM.
+   - `log_ingestion_absent` → Ops Agent broken on the VM; SSH to the
+     instance and run `journalctl -u google-cloud-ops-agent`.
+   - `monthly_cap` (billing) → §5.5.
+4. If no procedure in this Runbook resolves within the resolve SLA,
+   escalate (see 6.1) and begin a post-mortem draft in parallel.
+
+### 6.3 Post-mortem trigger matrix
+
+A post-mortem (using
+[`docs/postmortems/TEMPLATE.md`](docs/postmortems/TEMPLATE.md)) is
+**required** when any of the below are true:
+
+| Trigger | Deadline | Owner |
+|---|---|---|
+| Any P1 incident, regardless of duration | Draft within 48h, FINAL within 7 days | Incident commander |
+| Error budget ≥ 50 % consumed in 28d | Weekly review until month-end | Primary on-call |
+| Error budget 100 % consumed | Immediate — release freeze active per [`docs/error-budget-policy.md`](docs/error-budget-policy.md) | Primary on-call + eng manager |
+| MIG recreates the VM > 3× in one calendar month | FINAL within 7 days | Primary on-call |
+| Same root cause recurs within 30 days of a prior post-mortem | FINAL within 7 days; links to the prior post-mortem | Primary on-call |
+
+The on-call reviews action items from open post-mortems weekly until all
+P1 items are merged. Error budget consumption tables are the
+authoritative metric, not memory.
+
+### 6.4 What counts as an incident
+
+Per the error-budget policy:
+
+- **Incident** = any paging-level alert fires, **or** error budget
+  consumption increases by > 5 % in a single hour, **or** the uptime
+  check crosses below 99.5 % in a rolling 28-day window for the first
+  time in a given window.
+- **Event** (not an incident) = an anomaly that self-recovered before
+  any SLA threshold and before budget consumption accelerated. Log it in
+  Slack, don't file a post-mortem.
+
+---
+
 ## Quick Reference
 
 | Command | When |

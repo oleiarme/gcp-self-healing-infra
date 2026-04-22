@@ -109,6 +109,8 @@ gcloud iam workload-identity-pools providers update-oidc github \
 
 Without this condition, **any fork** could mint a token for the deploy SA. With it, only pushes on `main` of this repo can.
 
+**Optional drift enforcement (Phase 4 follow-up).** Setting the Terraform vars `wif_pool_id` and `wif_provider_id` enables a `data "google_iam_workload_identity_pool_provider"` read with a `postcondition` that compares the live `attribute_condition` against the canonical string. When enabled, any out-of-band edit of the WIF provider fails the next `terraform plan` with a copy-paste-ready `gcloud ... update-oidc` command. Default behaviour (both vars empty) keeps this repo decoupled from the pool resource, preserving the Phase-3 output-only contract.
+
 ### Secrets
 
 - Stored in **Google Secret Manager** with `user_managed` replication pinned to `us-central1`. No plaintext in Terraform state for secret values (variable types are `sensitive = true` and the values land directly in `secret_data`).
@@ -141,6 +143,7 @@ Digests are kept fresh by `.github/workflows/digest-refresh.yml`: a scheduled Gi
 | `tfsec` | aquasecurity/tfsec-action | security misconfigurations (open ports, plaintext secrets, missing encryption, public buckets) |
 | `Checkov` | bridgecrewio/checkov-action | second-opinion policy scanner; intentional overlap with tfsec for defence in depth |
 | `shellcheck` | direct binary | startup.sh sanity (suppresses SC2154 because Terraform interpolations look like shell vars) |
+| `trivy` (images) | aquasecurity/trivy-action | vuln-scans the pinned `var.n8n_image` / `var.cloudflared_image` digests for HIGH/CRITICAL CVEs. **Advisory at baseline** — findings are visible on every PR but don't block, because we cannot patch upstream images directly. Digest bumps via the weekly `digest-refresh.yml` workflow pick up fixes automatically. To flip the scan to blocking once a CVE-governance process lands, set `exit-code: "1"` in `.github/workflows/terraform.yml` |
 
 `tfsec` runs with `soft_fail=false` — any HIGH/CRITICAL finding blocks the PR. Suppress legitimately-skipped findings inline with `tfsec:ignore:<rule_id>` and a comment explaining why; do not suppress them in workflow config.
 
@@ -171,9 +174,11 @@ The GCS bucket that holds `terraform.tfstate` has **object versioning enabled** 
 
 Each `google_secret_manager_secret` has `lifecycle { prevent_destroy = true }` (Phase 3), so the secret resource itself cannot be wiped by `terraform destroy`. Individual *versions* stay disposable via `gcloud secrets versions disable|enable`: full procedure in [Runbook §5.3](Runbook.md#53-secret-version-restore).
 
-### Cost guardrail
+### Cost guardrail (opt-in)
 
 A `google_billing_budget` watches the project and alerts the on-call email channel (reused from Phase 2) at **50 / 90 / 100 %** of `var.monthly_budget_usd` (default `$5`). The budget amount is intentionally narrow — any steady-state spend above this is either a misconfiguration (accidental VM size bump, surprise egress) or a conscious scaling decision that should be explicit in a PR. Handling matrix: [Runbook §5.5](Runbook.md#55-billing-budget-alert).
+
+The budget is **opt-in**: set the `GCP_BILLING_ACCOUNT_ID` secret (format `AAAAAA-BBBBBB-CCCCCC`, from `gcloud beta billing accounts list`) to enable it. With the secret unset, `var.billing_account_id` defaults to `""` and the `google_billing_budget` resource is provisioned with `count = 0` — the rest of the stack deploys unchanged. Rationale: billing account IDs are account-scoped metadata (not per-environment), and some orgs treat them as confidential, so forcing the ID as a required variable would gate the whole stack on a secret operators may not want to provision.
 
 ## Quick Start
 
@@ -208,23 +213,28 @@ terraform apply
 Add these to **Settings → Secrets and variables → Actions**:
 
 **Secrets:**
-| Name | Description |
-|---|---|
-| `WIF_PROVIDER` | Workload Identity Federation provider |
-| `WIF_SA` | Service account email for WIF |
-| `TF_BACKEND_BUCKET` | GCS bucket name for Terraform state |
-| `TF_VAR_CF_TUNNEL_TOKEN` | Cloudflare Tunnel token |
-| `TF_VAR_db_password` | PostgreSQL password |
-| `TF_VAR_n8n_encryption_key` | n8n encryption key (random 32-char string) |
+| Name | Required? | Description |
+|---|---|---|
+| `WIF_PROVIDER` | yes | Workload Identity Federation provider |
+| `WIF_SA` | yes | Service account email for WIF |
+| `TF_BACKEND_BUCKET` | yes | GCS bucket name for Terraform state |
+| `TF_VAR_CF_TUNNEL_TOKEN` | yes | Cloudflare Tunnel token |
+| `TF_VAR_db_password` | yes | PostgreSQL password |
+| `TF_VAR_n8n_encryption_key` | yes | n8n encryption key (random 32-char string) |
+| `GCP_BILLING_ACCOUNT_ID` | optional (Phase 4) | Billing account ID (`AAAAAA-BBBBBB-CCCCCC`). When set, enables the `google_billing_budget` cost guardrail at 50/90/100 % of `var.monthly_budget_usd`; when unset, the budget resource is simply not created. Find via `gcloud beta billing accounts list`. |
+| `SLACK_BOT_TOKEN` | optional | Slack bot OAuth token (`xoxb-…`). When set, Cloud Monitoring publishes alerts to `TF_VAR_slack_channel` in addition to email |
 
 **Variables (non-secret):**
-| Name | Description |
-|---|---|
-| `TF_VAR_project_id` | GCP project ID |
-| `TF_VAR_db_host` | Cloud SQL private IP |
-| `TF_VAR_db_user` | PostgreSQL username |
+| Name | Required? | Description |
+|---|---|---|
+| `TF_VAR_project_id` | yes | GCP project ID |
+| `TF_VAR_db_host` | yes | Cloud SQL private IP |
+| `TF_VAR_db_user` | yes | PostgreSQL username |
+| `TF_VAR_n8n_public_host` | yes (Phase 2) | Public FQDN for the external uptime check |
+| `TF_VAR_oncall_email` | yes (Phase 2) | Email that receives SLO + budget alerts |
+| `TF_VAR_slack_channel` | optional | Slack channel (with leading `#`) for alerts. Ignored unless `SLACK_BOT_TOKEN` is set |
 
-Push to `main` → CI/CD deploys automatically.
+Push to `main` → CI/CD deploys automatically (after the `production` environment reviewer approves).
 
 ## Free Tier Compliance
 
@@ -262,15 +272,20 @@ Defined as code in `terraform/monitoring.tf` and `terraform/dashboards.tf`.
 
 | Policy | Signal | Burn rate | Trigger | Severity | Channels |
 |---|---|---|---|---|---|
-| `n8n SLO fast burn` | uptime good-fraction < 0.928 over **1h** | 14.4× (2% of 28d budget / 1h) | within 1h window | **CRITICAL** | email |
-| `n8n SLO slow burn` | uptime good-fraction < 0.97 over **6h** | 6× (5% of 28d budget / 6h) | within 6h window | WARNING | email |
-| `n8n startup script CRITICAL` | log-based metric `n8n/startup_critical` > 0 in 5m | n/a | 1 event | WARNING | email |
+| `n8n SLO fast burn` | uptime good-fraction < 0.928 over **1h** | 14.4× (2% of 28d budget / 1h) | within 1h window | **CRITICAL** | email + Slack (if enabled) |
+| `n8n SLO slow burn` | uptime good-fraction < 0.97 over **6h** | 6× (5% of 28d budget / 6h) | within 6h window | WARNING | email + Slack (if enabled) |
+| `n8n startup script CRITICAL` | log-based metric `n8n/startup_critical` > 0 in 5m | n/a | 1 event | WARNING | email + Slack (if enabled) |
+| `n8n log ingestion absent` | `logging/log_entry_count{log="startup_log"}` silent for 24h | absent signal | 24h no-data | **CRITICAL** | email + Slack (if enabled) |
 
 All alert policies carry a `runbook` user-label that deep-links to `Runbook.md` so the on-call engineer lands on the triage page directly from the alert.
 
+The **log ingestion absent** policy closes a subtle silent-failure mode: the `startup_critical` policy only fires when the Ops Agent ships the CRITICAL log line. If the Ops Agent is itself broken (startup.sh installs it with `|| echo WARNING`, i.e. best-effort non-fatal), the metric goes quiet — same result as a healthy VM, no page. The absent-data alert escalates that quietness into a paging signal.
+
 ### Notification channels
-- `TF_VAR_oncall_email` — required. Primary on-call email.
-- **Slack** — intentionally deferred. A Slack incoming-webhook URL embeds its own auth token in the path, which would leak through Terraform state and the Cloud Monitoring API if plumbed into a `webhook_tokenauth` channel. Slack delivery will be added in a later phase using the native `type = "slack"` channel with an OAuth token held in `sensitive_labels`.
+- **Email** (`TF_VAR_oncall_email`) — required. Primary on-call email, used for every alert policy.
+- **Slack** (`TF_VAR_slack_auth_token` / `TF_VAR_slack_channel`) — optional. When `slack_auth_token` is non-empty, Terraform provisions `google_monitoring_notification_channel` of native `type = "slack"` with the OAuth token in `sensitive_labels` (server-side only; never round-trips through state in plaintext). The former `webhook_tokenauth` route is avoided because a Slack incoming-webhook URL embeds its own auth credential in the path.
+
+On-call rotation (who gets the email / Slack mention) is codified in [`docs/oncall.md`](docs/oncall.md), not in Terraform.
 
 ### Log ingestion
 `scripts/startup.sh` installs the Ops Agent with a deliberately **logging-only** config (`/etc/google-cloud-ops-agent/config.yaml`). Host- and process-metrics receivers are off — they exceeded the e2-micro IO budget historically (commit `del ops agent not enouth io`). The single tail receiver on `/var/log/startup.log` is what feeds the `n8n/startup_critical` log-based metric.
@@ -305,10 +320,20 @@ terraform output -json | jq '{
 ## Runbook
 
 For incident response procedures see [Runbook.md](Runbook.md):
-- **Scenario 1:** MIG recreated VM (health check failed)
-- **Scenario 2:** Startup timeout / boot-loop
-- **Scenario 3:** Secret rotation (DB password, n8n key, Cloudflare token)
-- **Scenario 4:** MIG update / terraform redeploy
+- **§1:** MIG recreated VM (health check failed)
+- **§2:** Startup timeout / boot-loop
+- **§3:** Secret rotation (DB password, n8n key, Cloudflare token)
+- **§4:** MIG update / terraform redeploy
+- **§5:** Backup & DR (Cloud SQL PITR, state rollback, secret version restore, zonal failover, budget handling)
+- **§6:** Escalation & on-call (severity matrix, triage checklist, post-mortem trigger matrix)
+
+## Operational Practices
+
+Phase 4 follow-up — SRE maturity docs that live alongside the Runbook:
+
+- **Error-budget policy** — [`docs/error-budget-policy.md`](docs/error-budget-policy.md). Defines the 28d / 99.5 % budget states, what the `production` Environment reviewer must check before approving a deploy, and the procedural release freeze at 50 % / 90 % / 100 % consumption.
+- **On-call rotation** — [`docs/oncall.md`](docs/oncall.md). Primary / backup roster, weekly hand-off procedure, ack / resolve SLAs per severity, and how the rotation maps onto the Cloud Monitoring notification channels.
+- **Post-mortem template** — [`docs/postmortems/TEMPLATE.md`](docs/postmortems/TEMPLATE.md). Google SRE Workbook format. Required after every P1, at 50 %+ budget consumption, after > 3 MIG recreations in a month, or on any repeat root cause within 30 days (matrix in Runbook §6.3).
 
 ## Project Structure
 
