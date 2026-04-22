@@ -1,17 +1,22 @@
-# Instance Group
+# Instance Group (regional since Phase 4)
 output "mig_name" {
   description = "Managed Instance Group name"
-  value       = google_compute_instance_group_manager.mig.name
+  value       = google_compute_region_instance_group_manager.mig.name
 }
 
-output "mig_zone" {
-  description = "MIG zone"
-  value       = google_compute_instance_group_manager.mig.zone
+output "mig_region" {
+  description = "Region the MIG operates in (us-central1 for Free Tier)"
+  value       = google_compute_region_instance_group_manager.mig.region
+}
+
+output "mig_distribution_zones" {
+  description = "Zones the regional MIG may place its single VM in. On a zonal outage the VM self-heals into a surviving zone."
+  value       = google_compute_region_instance_group_manager.mig.distribution_policy_zones
 }
 
 output "instance_template" {
   description = "Instance template self-link (use to create golden disk from this)"
-  value       = google_compute_instance_group_manager.mig.version[0].instance_template
+  value       = google_compute_region_instance_group_manager.mig.version[0].instance_template
 }
 
 # Health Check — use these for Cloud Monitoring alerting
@@ -81,4 +86,10 @@ output "dashboard_id" {
 output "wif_attribute_condition" {
   description = "Required attribute_condition on the WIF OIDC provider that GitHub Actions assumes. Paste into `gcloud iam workload-identity-pools providers update-oidc`."
   value       = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
+}
+
+# Resilience & DR (Phase 4)
+output "billing_budget_name" {
+  description = "Resource name of the monthly spend cap billing budget. Edit the thresholds / amount by changing var.monthly_budget_usd and re-applying."
+  value       = google_billing_budget.monthly_cap.name
 }

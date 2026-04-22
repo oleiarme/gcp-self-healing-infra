@@ -25,7 +25,9 @@ resource "google_project_service" "required" {
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "logging.googleapis.com",
-    "monitoring.googleapis.com"
+    "monitoring.googleapis.com",
+    # Phase 4: google_billing_budget goes through the billingbudgets API.
+    "billingbudgets.googleapis.com",
   ])
 
   service = each.key
@@ -266,11 +268,27 @@ resource "google_compute_instance_template" "tpl" {
   }
 }
 
-resource "google_compute_instance_group_manager" "mig" {
-  name               = "n8n-mig"
-  base_instance_name = "n8n"
-  zone               = var.zone
-  target_size        = 1
+# ==========================================
+# Managed Instance Group (regional, Phase 4)
+# ==========================================
+# Replaces the previous zonal google_compute_instance_group_manager. The
+# MIG still runs a single e2-micro (target_size=1, Free Tier compliant),
+# but it is now free to place that VM in any zone of us-central1 listed
+# in var.mig_zones. Practical effect on SLO: a zonal outage (whole AZ
+# goes dark) no longer keeps the VM dead — MIG's self-healing path tries
+# a surviving zone on the next replacement. Expected zonal-failover MTTR
+# is the same as cold start (≆17 min worst case) because the replacement
+# path always runs full startup.sh on a fresh VM.
+#
+# State-migration note: on first apply the old zonal resource is
+# destroyed and this regional resource is created. Brief downtime during
+# the cutover is expected; see Runbook §Backup & DR for the procedure.
+resource "google_compute_region_instance_group_manager" "mig" {
+  name                      = "n8n-mig"
+  base_instance_name        = "n8n"
+  region                    = var.region
+  distribution_policy_zones = var.mig_zones
+  target_size               = 1
 
   version {
     instance_template = google_compute_instance_template.tpl.id
@@ -293,12 +311,64 @@ resource "google_compute_instance_group_manager" "mig" {
   }
 
   update_policy {
-    type                  = "PROACTIVE"
-    minimal_action        = "REPLACE"
-    max_surge_fixed       = 0
-    max_unavailable_fixed = 1
-    replacement_method    = "RECREATE"
+    type                         = "PROACTIVE"
+    minimal_action               = "REPLACE"
+    max_surge_fixed              = 0
+    max_unavailable_fixed        = length(var.mig_zones) # must be ≥ number of distribution zones on a regional MIG
+    replacement_method           = "RECREATE"
+    instance_redistribution_type = "NONE" # target_size=1; redistribution is meaningless and would cause needless relocations
   }
+}
+
+# ==========================================
+# Cost guardrail (Phase 4)
+# ==========================================
+# Free-Tier envelope is ~$0/mo in steady state, so any material spend is
+# either a misconfiguration (e.g. VM size increased by accident, surprise
+# egress) or a conscious scaling decision. Alerting at 50/90/100% of a
+# hard monthly cap (var.monthly_budget_usd, default $5) gives us three
+# chances to notice before a real bill. The alert fires via the same
+# google_monitoring_notification_channel the SLO burn-rate alerts use
+# (see monitoring.tf) — one on-call inbox, one pager.
+resource "google_billing_budget" "monthly_cap" {
+  billing_account = var.billing_account_id
+  display_name    = "n8n self-healing infra — monthly cap"
+
+  budget_filter {
+    projects = ["projects/${var.project_id}"]
+  }
+
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = tostring(var.monthly_budget_usd)
+    }
+  }
+
+  threshold_rules {
+    threshold_percent = 0.5
+    spend_basis       = "CURRENT_SPEND"
+  }
+  threshold_rules {
+    threshold_percent = 0.9
+    spend_basis       = "CURRENT_SPEND"
+  }
+  threshold_rules {
+    threshold_percent = 1.0
+    spend_basis       = "CURRENT_SPEND"
+  }
+
+  # Piggyback on the email channel provisioned in monitoring.tf so the
+  # on-call rotation receives budget alerts alongside SLO alerts. Opting
+  # into pubsubTopic or additional channels is left for a later phase.
+  all_updates_rule {
+    monitoring_notification_channels = [
+      google_monitoring_notification_channel.email.id,
+    ]
+    disable_default_iam_recipients = false
+  }
+
+  depends_on = [google_project_service.required]
 }
 
 
