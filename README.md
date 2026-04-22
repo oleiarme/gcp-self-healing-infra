@@ -83,6 +83,74 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 - Cloudflare Tunnel token
 - GitHub repository secrets configured
 
+## Security Posture
+
+(Phase 3 of [`docs/slo-roadmap.md`](docs/slo-roadmap.md). All controls below are codified in `terraform/` or `.github/`; no manual console clicks.)
+
+### Identity & access (least-privilege)
+
+| Identity | OAuth scope on VM | Explicit IAM bindings |
+|---|---|---|
+| `n8n-app-sa` (VM SA) | `cloud-platform` (required for Secret Manager — no narrower scope exists) | `roles/logging.logWriter`, `roles/monitoring.metricWriter` (project-wide), `roles/secretmanager.secretAccessor` per-secret on each of the 3 secrets — **never** project-wide |
+| GitHub Actions deployer | n/a (federated) | Whatever role the WIF SA holds — should be ≤ `roles/editor` on this single project |
+
+The "intersection of OAuth scope ∩ IAM bindings" model means a future role accidentally granted to `roles/editor` would still be useless without re-applying the SA scope; conversely, a future per-resource binding (e.g. on a new secret) is opt-in for this VM. Both layers must agree to grant a permission.
+
+### WIF (keyless) attribute condition
+
+The WIF provider is created out-of-band (not in this repo) but **must** be created with an attribute condition that pins it to this repository on the protected branch. The variables `wif_allowed_repository` and `wif_allowed_ref` in `terraform/variables.tf` document the canonical values. Reference command for the operator:
+
+```bash
+gcloud iam workload-identity-pools providers update-oidc github \
+  --workload-identity-pool=github-pool \
+  --location=global \
+  --attribute-condition='assertion.repository == "kwonvkim-collab/gcp-self-healing-infra" && assertion.ref == "refs/heads/main"'
+```
+
+Without this condition, **any fork** could mint a token for the deploy SA. With it, only pushes on `main` of this repo can.
+
+### Secrets
+
+- Stored in **Google Secret Manager** with `user_managed` replication pinned to `us-central1`. No plaintext in Terraform state for secret values (variable types are `sensitive = true` and the values land directly in `secret_data`).
+- Each secret has `lifecycle.prevent_destroy = true`. `terraform destroy` cannot wipe a credential that the running VM depends on; an intentional decommission requires `terraform state rm` first.
+- The `n8n-app-sa` Service Account is also `prevent_destroy` — recreating it would orphan every per-secret IAM binding.
+- IAM bindings on secrets are explicit `google_secret_manager_secret_iam_member` (per-secret), never `_iam_policy` (which is destructive).
+
+### Container image pinning
+
+Both container images run on the VM are pinned by **SHA256 digest** in addition to a human-readable tag, so a re-issued tag (e.g. `cloudflared:2026.3.0` rebuilt with new layers) cannot silently change what runs in production.
+
+| Image | Variable | Pinned to |
+|---|---|---|
+| n8n | `var.n8n_image` | `docker.n8n.io/n8nio/n8n:2.16.1@sha256:ad20607c…` |
+| cloudflared | `var.cloudflared_image` | `cloudflare/cloudflared:2026.3.0@sha256:6b599ca3…` |
+
+Dependabot keeps both digests fresh — see `.github/dependabot.yml`.
+
+### Deploy gate
+
+`Settings → Environments → production` must be configured with **at least one required reviewer** and the `deploy.yml` workflow declares `environment: production` so every `terraform apply` is interactive-approved by a human. Recommended additional protections: 5-minute wait timer; restrict to `main`; restrict to repository admins.
+
+### Static analysis in CI (`.github/workflows/terraform.yml`)
+
+| Check | Tool | Purpose |
+|---|---|---|
+| `terraform fmt` | terraform | enforces canonical formatting |
+| `terraform validate` | terraform | catches schema/type errors before plan |
+| `tflint` | terraform-linters/setup-tflint + Google ruleset | catches deprecated args, unused variables, GCP-specific footguns |
+| `tfsec` | aquasecurity/tfsec-action | security misconfigurations (open ports, plaintext secrets, missing encryption, public buckets) |
+| `Checkov` | bridgecrewio/checkov-action | second-opinion policy scanner; intentional overlap with tfsec for defence in depth |
+| `shellcheck` | direct binary | startup.sh sanity (suppresses SC2154 because Terraform interpolations look like shell vars) |
+
+`tfsec` runs with `soft_fail=false` — any HIGH/CRITICAL finding blocks the PR. Suppress legitimately-skipped findings inline with `tfsec:ignore:<rule_id>` and a comment explaining why; do not suppress them in workflow config.
+
+### Supply chain
+
+- All Actions in workflows are pinned by major version (`@v4` etc.). Dependabot (`.github/dependabot.yml`) groups weekly minor + patch bumps into one PR.
+- Container image digests refreshed by Dependabot's `docker` ecosystem.
+
+
+
 ## Quick Start
 
 ### 1. Clone & configure

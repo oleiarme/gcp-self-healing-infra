@@ -11,7 +11,7 @@ output "mig_zone" {
 
 output "instance_template" {
   description = "Instance template self-link (use to create golden disk from this)"
-  value       = google_compute_instance_group_manager.mig.version.0.instance_template
+  value       = google_compute_instance_group_manager.mig.version[0].instance_template
 }
 
 # Health Check — use these for Cloud Monitoring alerting
@@ -71,4 +71,14 @@ output "alert_policy_startup_critical" {
 output "dashboard_id" {
   description = "Cloud Monitoring dashboard resource name for the n8n SLO dashboard"
   value       = google_monitoring_dashboard.n8n_slo.id
+}
+
+# Security posture (Phase 3) — emit the canonical WIF attribute condition so
+# an operator can copy-paste it into `gcloud iam workload-identity-pools
+# providers update-oidc …`. The WIF pool itself lives out-of-band (one-shot
+# bootstrap) so Terraform cannot enforce this, but surfacing the expected
+# condition keeps the source of truth in this repo.
+output "wif_attribute_condition" {
+  description = "Required attribute_condition on the WIF OIDC provider that GitHub Actions assumes. Paste into `gcloud iam workload-identity-pools providers update-oidc`."
+  value       = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
 }

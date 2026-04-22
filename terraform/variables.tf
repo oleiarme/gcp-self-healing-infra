@@ -65,3 +65,50 @@ variable "oncall_email" {
 # labels.url leaks the secret through Terraform state and the Cloud
 # Monitoring API. Slack delivery will be added in a later phase using the
 # native type = "slack" channel with an OAuth token in sensitive_labels.
+
+# --------------------------------------------------------
+# Container image pinning (Phase 3 of docs/slo-roadmap)
+# --------------------------------------------------------
+# Both images are pinned by SHA256 digest in addition to the human-readable
+# tag, so a re-issued tag (e.g. cloudflared rebuilds the same tag with new
+# layers) cannot silently change what runs on the VM. Dependabot
+# (.github/dependabot.yml) keeps both digests fresh.
+#
+# To refresh a digest manually:
+#   docker buildx imagetools inspect <image>:<tag>     # local docker
+#   crane digest <image>:<tag>                         # crane CLI
+#   curl -sI -H "Accept: application/vnd.oci.image.index.v1+json" \
+#        https://<registry>/v2/<repo>/manifests/<tag>  # registry HTTP API
+
+variable "n8n_image" {
+  description = "n8n container image, including registry, repo, tag and SHA256 digest. Used by scripts/startup.sh in the docker-compose service definition."
+  type        = string
+  default     = "docker.n8n.io/n8nio/n8n:2.16.1@sha256:ad20607cdd24bac004ec44804b6b8ded9a2fbf92ed46c4496bf007762c883af2"
+}
+
+variable "cloudflared_image" {
+  description = "cloudflared container image, including registry, repo, tag and SHA256 digest. Used by scripts/startup.sh in the docker-compose service definition."
+  type        = string
+  default     = "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
+}
+
+# --------------------------------------------------------
+# Workload Identity Federation guardrails (Phase 3)
+# --------------------------------------------------------
+# These document the attribute condition that must be applied to the WIF
+# provider that GitHub Actions assumes. The provider is created
+# out-of-band (one-shot bootstrap, not in this codebase); Terraform
+# surfaces the expected condition string via `terraform output
+# wif_attribute_condition` so an operator can copy-paste it straight
+# into `gcloud iam workload-identity-pools providers update-oidc`.
+variable "wif_allowed_repository" {
+  description = "Fully-qualified GitHub repository (owner/name) allowed to assume the WIF provider."
+  type        = string
+  default     = "kwonvkim-collab/gcp-self-healing-infra"
+}
+
+variable "wif_allowed_ref" {
+  description = "Fully-qualified Git ref allowed to assume the WIF provider (e.g. 'refs/heads/main')."
+  type        = string
+  default     = "refs/heads/main"
+}

@@ -46,3 +46,55 @@ jobs:
         # ${db_host}/${db_user} refs are Terraform interpolations, not shell
         # variables. SC2086 suppressed for gcloud retry patterns.
         run: shellcheck --severity=warning --exclude=SC2154,SC2086 scripts/*.sh
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: tflint --init
+        run: tflint --init
+        working-directory: ./terraform
+      - name: tflint
+        # --recursive walks every module dir. --minimum-failure-severity=warning
+        # means warnings still block the PR, matching the rest of the CI.
+        run: tflint --recursive --minimum-failure-severity=warning
+
+  tfsec:
+    name: tfsec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tfsec
+        # tfsec scans Terraform for security misconfigurations (open ports,
+        # plaintext secrets, missing encryption, public buckets, etc.). The
+        # action exits non-zero on any HIGH/CRITICAL finding. soft_fail=false
+        # to keep the gate strict; if a finding is intentional, suppress
+        # inline with `tfsec:ignore:<rule_id>` and a comment explaining why.
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: terraform
+          soft_fail: false
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Checkov
+        # Checkov is an additional policy scanner — overlap with tfsec is
+        # intentional (defence in depth, different rule sets). Quiet mode
+        # to keep the log readable; failures still surface in the action
+        # summary.
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          quiet: true
+          output_format: cli
+          # Skip CKV_GCP_82 (boot disk encryption KMS) — Free Tier project
+          # uses Google-managed encryption only; CKV_GCP_38 same reason.
+          skip_check: CKV_GCP_82,CKV_GCP_38
