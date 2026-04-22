@@ -68,21 +68,19 @@ systemctl enable docker
 systemctl enable containerd
 
 echo "=== Get Secrets from Secret Manager ==="
-
-echo "=== Get Secrets from Secret Manager ==="
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || { 
-  echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"; 
-  exit 1; 
+DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
+  echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
+  exit 1
 }
 
-N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || { 
-  echo "❌ CRITICAL: Failed to fetch N8N_KEY"; 
-  exit 1; 
+N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
+  echo "❌ CRITICAL: Failed to fetch N8N_KEY"
+  exit 1
 }
 
-CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || { 
-  echo "❌ CRITICAL: Failed to fetch CF_TOKEN"; 
-  exit 1; 
+CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
+  echo "❌ CRITICAL: Failed to fetch CF_TOKEN"
+  exit 1
 }
 
 echo "✅ All secrets fetched successfully."
@@ -119,16 +117,16 @@ services:
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: true
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
-      healthcheck:
-        test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
-        # 10s — matches GCP health check check_interval_sec (main.tf).
-        # GCP probes every 10s. If Docker also checks every 10s → no stale
-        # health state. Previous 60s interval meant GCP could read healthy
-        # status while n8n was already dead for up to 50s.
-        interval: 10s
-        timeout: 15s
-        retries: 10
-        start_period: 420s
+    healthcheck:
+      # 10s matches GCP health check check_interval_sec in terraform/main.tf.
+      # GCP probes every 10s; if Docker also checks every 10s there is no
+      # stale-health window where GCP reads healthy while n8n is already dead.
+      # start_period 420s covers cold DB migrations on e2-micro.
+      test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
+      interval: 10s
+      timeout: 15s
+      retries: 10
+      start_period: 420s
 
   cloudflared:
     image: cloudflare/cloudflared:2026.3.0
