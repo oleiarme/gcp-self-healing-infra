@@ -38,14 +38,14 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(1m)\n| group_by 1h, [bad_fraction_1h: 1 - mean(value.check_passed)]\n| value [burn_rate_1h: val() / 0.005]"
+                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(1h)\n| value [burn_rate_1h: (1 - val()) / 0.005]"
                 },
                 "plotType": "LINE",
                 "legendTemplate": "fast (1h)"
               },
               {
                 "timeSeriesQuery": {
-                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(1m)\n| group_by 6h, [bad_fraction_6h: 1 - mean(value.check_passed)]\n| value [burn_rate_6h: val() / 0.005]"
+                  "timeSeriesQueryLanguage": "fetch uptime_url\n| metric 'monitoring.googleapis.com/uptime_check/check_passed'\n| filter (resource.host == '${host}') && metric.check_id == '${uptime_check_id}'\n| align fraction_true(6h)\n| value [burn_rate_6h: (1 - val()) / 0.005]"
                 },
                 "plotType": "LINE",
                 "legendTemplate": "slow (6h)"
