@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # GitHub Actions ----------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    # All Actions in this repo are tagged by major version (`@v4` etc.) but
+    # we still want Dependabot to PR minor + patch bumps in case of CVE
+    # fixes. Group them so we get one PR per week, not one per action.
+    groups:
+      ci-actions:
+        patterns:
+          - "*"
+
+  # Container image digests (var.n8n_image, var.cloudflared_image) ---------
+  # Intentionally NOT handled here. Dependabot's `docker` ecosystem scans
+  # Dockerfiles and docker-compose files — it does not parse Terraform
+  # variable defaults, which is where our digests live. Instead, see
+  # .github/workflows/digest-refresh.yml: a weekly scheduled job that uses
+  # `crane digest` to re-resolve both images and opens a PR if either
+  # digest has moved.
