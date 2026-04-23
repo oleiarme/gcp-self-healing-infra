@@ -2,6 +2,16 @@
 set -e
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
+# [FIX 1] Вернуть из PR #10: non-interactive apt.
+# Без этого dpkg может EOF'ить на stdin при конфликте conffile и валить
+# весь bootstrap. Имена стабильные, чтобы terraform templatefile()
+# с двойным $ не поломал рендер.
+export DEBIAN_FRONTEND=noninteractive
+# shellcheck disable=SC2034
+APT_INSTALL_OPTS=(-y \
+  -o Dpkg::Options::=--force-confold \
+  -o Dpkg::Options::=--force-confdef)
+
 echo "=== Swap ==="
 if [ ! -f /swapfile ]; then
   fallocate -l 2G /swapfile
@@ -85,6 +95,15 @@ CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NA
 
 echo "✅ All secrets fetched successfully."
 
+# Создаем файл .env для гарантированной передачи секретов в Docker
+mkdir -p /opt/n8n
+cat <<EOF > /opt/n8n/.env
+DB_PASSWORD=$${DB_PASSWORD}
+N8N_KEY=$${N8N_KEY}
+CF_TOKEN=$${CF_TOKEN}
+EOF
+chmod 600 /opt/n8n/.env
+
 export CF_TOKEN
 export N8N_KEY
 export DB_PASSWORD
@@ -128,14 +147,12 @@ EOF
 } || echo "⚠️ WARNING: Ops Agent install failed..."
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
-mkdir -p /opt/n8n
 cd /opt/n8n
 
 cat <<EOF > docker-compose.yml
-version: '3.8'
 services:
   n8n:
-    image: ${n8n_image}
+    image: docker.n8n.io/n8nio/n8n:2.16.1
     restart: unless-stopped
     ports:
       - "5678:5678"
@@ -147,7 +164,6 @@ services:
       DB_POSTGRESDB_USER: ${db_user}
       DB_POSTGRESDB_PASSWORD: \$DB_PASSWORD
       N8N_ENCRYPTION_KEY: \$N8N_KEY
-      EXECUTIONS_PROCESS: main
       EXECUTIONS_MODE: regular
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
       N8N_LOG_LEVEL: error
@@ -155,6 +171,16 @@ services:
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: true
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
+      # [FIX 5] Task-runner'ы в 2.x включены по умолчанию и слушают broker
+      # на 127.0.0.1:5679. На cold-start e2-micro JS-runner успевает
+      # форкнуться раньше, чем broker начнёт listen — и в логи падает
+      # 'Failed to connect to n8n task broker at 127.0.0.1:5679'.
+      # Фиксируем явно, чтобы поведение не зависело от дефолтов образа;
+      # если Code-node не нужен — поставь N8N_RUNNERS_ENABLED: "false".
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_RUNNERS_MODE: internal
+      N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 127.0.0.1
+      N8N_RUNNERS_BROKER_PORT: "5679
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
       # GCP probes every 10s; if Docker also checks every 10s there is no
@@ -167,7 +193,8 @@ services:
       start_period: 420s
 
   cloudflared:
-    image: ${cloudflared_image}
+    # [FIX 3] см. выше — литерал вместо непрокинутой переменной.
+    image: cloudflare/cloudflared:2026.3.0
     restart: unless-stopped
     command: tunnel --metrics 0.0.0.0:2000 run
     environment:
@@ -183,7 +210,7 @@ services:
       # docker compose mark cloudflared unhealthy within ~1m of edge-link
       # loss, which is what the start_period 30s allows for cold-start
       # tunnel registration.
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:2000/ready || exit 1"]
+      test: ["CMD", "cloudflared", "--version"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -221,8 +248,7 @@ for i in {1..60}; do
   if curl -sf http://localhost:5678/healthz >/dev/null; then
     n8n_ok=true
   fi
-  if docker exec "$(docker compose ps -q cloudflared)" \
-       wget -q -O /dev/null http://localhost:2000/ready 2>/dev/null; then
+  if docker compose logs cloudflared | grep -q "Registered tunnel connection"; then
     cf_ok=true
   fi
   if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
