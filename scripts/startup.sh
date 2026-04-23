@@ -120,9 +120,12 @@ EOF
 # the n8n container still starts and the GCP health check stays green.
 {
   retry curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh &&
-    retry bash add-google-cloud-ops-agent-repo.sh --also-install &&
+    # Сначала добавляем репозиторий БЕЗ установки (убираем --also-install)
+    retry bash add-google-cloud-ops-agent-repo.sh &&
+    # Устанавливаем принудительно, игнорируя вопросы о конфигах
+    retry apt-get install -y -o Dpkg::Options::="--force-confold" google-cloud-ops-agent &&
     systemctl enable --now google-cloud-ops-agent
-} || echo "⚠️ WARNING: Ops Agent install failed — continuing without structured log ingestion."
+} || echo "⚠️ WARNING: Ops Agent install failed..."
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 mkdir -p /opt/n8n
