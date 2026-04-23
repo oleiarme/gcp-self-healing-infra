@@ -99,9 +99,9 @@ echo "✅ All secrets fetched successfully."
 # Создаем файл .env для гарантированной передачи секретов в Docker
 mkdir -p /opt/n8n
 cat <<EOF > /opt/n8n/.env
-DB_PASSWORD=${DB_PASSWORD}
-N8N_KEY=${N8N_KEY}
-CF_TOKEN=${CF_TOKEN}
+DB_PASSWORD=$${DB_PASSWORD}
+N8N_KEY=$${N8N_KEY}
+CF_TOKEN=$${CF_TOKEN}
 EOF
 chmod 600 /opt/n8n/.env
 
