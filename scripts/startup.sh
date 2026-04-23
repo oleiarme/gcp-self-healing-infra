@@ -180,7 +180,7 @@ services:
       N8N_RUNNERS_ENABLED: "true"
       N8N_RUNNERS_MODE: internal
       N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 127.0.0.1
-      N8N_RUNNERS_BROKER_PORT: "5679
+      N8N_RUNNERS_BROKER_PORT: 5679
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
       # GCP probes every 10s; if Docker also checks every 10s there is no
