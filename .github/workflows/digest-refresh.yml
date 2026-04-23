@@ -33,7 +33,7 @@ jobs:
     name: Resolve digests and open PR if changed
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install crane
         # crane is the canonical go-containerregistry CLI for digest lookups.
@@ -53,14 +53,14 @@ jobs:
         # would still produce syntactically valid HCL but break the plan.
         # Catching that here is strictly better than catching it in the PR
         # CI the reviewer would otherwise have to chase.
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
       - run: |
           cd terraform
           terraform init -backend=false
           terraform validate
 
       - name: Open PR if variables.tf changed
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "chore(supply-chain): refresh container image digests"
           branch: chore/refresh-image-digests
