@@ -1,0 +1,66 @@
+# terraform/backend.conf.example
+#
+# Reference config for the GCS backend that stores terraform.tfstate.
+# Copy to terraform/backend.conf (gitignored) and replace <...> placeholders
+# before running `terraform init -backend-config=backend.conf`.
+#
+# Why a separate file: the backend configuration is evaluated before any
+# variables are available, so `var.project_id` etc. cannot be used inside
+# the `backend "gcs" {}` block in main.tf. The backend config file is the
+# only supported way to inject these values at init time.
+
+bucket = "<project-id>-tfstate"
+prefix = "n8n-self-healing"
+
+# ---------------------------------------------------------------------------
+# Recommended bucket configuration (one-shot bootstrap, not Terraform-managed)
+# ---------------------------------------------------------------------------
+# Create the bucket once via gcloud before the very first `terraform init`.
+# The commands below are what the Phase 4 "DR & state rollback" procedure
+# depends on, and are documented in README §Resilience & DR and
+# Runbook.md §Backup & DR.
+#
+#   BUCKET=<project-id>-tfstate
+#   REGION=us-central1            # keep state in the same region as the infra
+#
+#   # 1. Create the bucket, non-public, uniform IAM (default since 2020).
+#   gcloud storage buckets create "gs://$BUCKET" \
+#       --location="$REGION" \
+#       --uniform-bucket-level-access \
+#       --public-access-prevention
+#
+#   # 2. Enable object versioning so every `terraform apply` write is
+#   #    rollback-able by `gcloud storage cp gs://$BUCKET/<prefix>/default.tfstate#<gen>`.
+#   gcloud storage buckets update "gs://$BUCKET" --versioning
+#
+#   # 3. Lifecycle rule: cap the history we retain. Keep the last 30
+#   #    non-current versions; delete anything older than 90 days.
+#   #    Adjust to your compliance policy.
+#   cat > /tmp/lifecycle.json <<'JSON'
+#   {
+#     "lifecycle": {
+#       "rule": [
+#         {
+#           "action": { "type": "Delete" },
+#           "condition": { "numNewerVersions": 30, "isLive": false }
+#         },
+#         {
+#           "action": { "type": "Delete" },
+#           "condition": { "daysSinceNoncurrentTime": 90, "isLive": false }
+#         }
+#       ]
+#     }
+#   }
+#   JSON
+#   gcloud storage buckets update "gs://$BUCKET" --lifecycle-file=/tmp/lifecycle.json
+#
+# Verifying:
+#   gcloud storage buckets describe "gs://$BUCKET" \
+#       --format='value(versioning.enabled,lifecycle.rule)'
+#   # expected: True ... [ ... numNewerVersions=30 ..., daysSinceNoncurrentTime=90 ... ]
+#
+# State rollback:
+#   gcloud storage ls --versions "gs://$BUCKET/<prefix>/default.tfstate"
+#   # pick the generation you want, then:
+#   gcloud storage cp "gs://$BUCKET/<prefix>/default.tfstate#<generation>" \
+#       "gs://$BUCKET/<prefix>/default.tfstate"

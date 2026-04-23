@@ -13,6 +13,11 @@ concurrency:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    # GitHub Environment "production" is the deploy approval gate. Configure
+    # it under Settings → Environments → production with at least one
+    # required reviewer (and ideally a wait timer + branch restriction to
+    # `main`). All `terraform apply` runs go through this human approval.
+    environment: production
     defaults:
       run:
         working-directory: ./terraform # Все команды будут выполняться здесь
@@ -52,6 +57,28 @@ jobs:
           TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
           TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
           TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+          TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
+          TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
+          # Phase 4 resilience: google_billing_budget requires a billing
+          # account ID. Stored as a repository/env secret rather than a var
+          # because the ID is account-level metadata, not per-environment
+          # config — and some orgs treat it as confidential.
+          TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
+          # Optional — if set, enables Slack notification channel in addition
+          # to email. If unset, only email fires. See monitoring.tf for the
+          # conditional wiring. The `||` fallback keeps Terraform's own
+          # `default = "#n8n-ops"` semantics intact: when the GitHub
+          # variable is undefined, `vars.TF_VAR_slack_channel` evaluates to
+          # an empty string (falsy in GH Actions expressions), and the
+          # literal default kicks in instead of being overwritten by "".
+          TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
+          # WIF attribute-condition pinning + runbook URL rendering both
+          # reference this repo's GitHub identity. Derived from the
+          # workflow's own `github.repository` context so forks inherit
+          # the correct values automatically without per-fork config.
+          TF_VAR_wif_allowed_repository: ${{ github.repository }}
+          TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -63,3 +90,14 @@ jobs:
           TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
           TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
           TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+          TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
+          TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
+          TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
+          # Same `||` fallback as the Plan step above: GitHub Actions
+          # vars.* are only accessible in ${{ ... }} expressions, not
+          # auto-exported as env vars, so we must list the var explicitly
+          # with a fallback that preserves Terraform's `default = "#n8n-ops"`.
+          TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
+          TF_VAR_wif_allowed_repository: ${{ github.repository }}
+          TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}

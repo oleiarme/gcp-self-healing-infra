@@ -2,19 +2,23 @@ name: terraform-validate
 
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+      - 'docs/**'
+      - 'phase-**'
     paths:
       - 'terraform/**'
       - 'scripts/**'
+      - 'docs/drills/**'
+      - '.github/workflows/terraform.yml'
 
 jobs:
-  validate:
+  terraform:
     name: Validate & Lint
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./terraform
-
     steps:
       - uses: actions/checkout@v4
 
@@ -31,3 +35,123 @@ jobs:
       # Fails if any .tf file is not formatted
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
+
+  shellcheck:
+    name: Shellcheck scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        # SC2154 suppressed: startup.sh is a Terraform templatefile and the
+        # ${db_host}/${db_user} refs are Terraform interpolations, not shell
+        # variables. SC2086 suppressed for gcloud retry patterns.
+        run: shellcheck --severity=warning --exclude=SC2154,SC2086 scripts/*.sh docs/drills/*.sh
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: tflint --init
+        run: tflint --init
+        working-directory: ./terraform
+      - name: tflint
+        # --recursive walks every module dir. --minimum-failure-severity=warning
+        # means warnings still block the PR, matching the rest of the CI.
+        run: tflint --recursive --minimum-failure-severity=warning
+
+  tfsec:
+    name: tfsec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tfsec
+        # tfsec scans Terraform for security misconfigurations (open ports,
+        # plaintext secrets, missing encryption, public buckets, etc.). The
+        # action exits non-zero on any HIGH/CRITICAL finding. soft_fail=false
+        # to keep the gate strict; if a finding is intentional, suppress
+        # inline with `tfsec:ignore:<rule_id>` and a comment explaining why.
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: terraform
+          soft_fail: false
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Checkov
+        # Checkov is an additional policy scanner — overlap with tfsec is
+        # intentional (defence in depth, different rule sets). Quiet mode
+        # to keep the log readable; failures still surface in the action
+        # summary.
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          quiet: true
+          output_format: cli
+          # Skip CKV_GCP_82 (boot disk encryption KMS) — Free Tier project
+          # uses Google-managed encryption only; CKV_GCP_38 same reason.
+          skip_check: CKV_GCP_82,CKV_GCP_38
+
+  trivy-images:
+    name: trivy (pinned images)
+    runs-on: ubuntu-latest
+    # Container-image vuln scan for the digests pinned in
+    # terraform/variables.tf.
+    #
+    # Policy (2026-04 baseline): the scan is currently **advisory** —
+    # exit-code=0 so findings never block a PR. The rationale is that
+    # every HIGH/CRITICAL finding here is sourced from an upstream image
+    # we do not build (n8nio/n8n bundles its own npm tree;
+    # cloudflare/cloudflared ships a pinned Alpine base). We cannot
+    # patch them. What we can do is:
+    #   1. See the findings on every PR (this job prints them).
+    #   2. Ship digest bumps the moment upstream releases fixes — that's
+    #      exactly what .github/workflows/digest-refresh.yml does every
+    #      Monday, opening a PR with the new digest if either image has
+    #      moved.
+    # To flip the scan to blocking once the repo has a governance
+    # process (SLA on CVE acceptance, .trivyignore with expirations,
+    # owner for quarterly review), set exit-code back to "1". Severity
+    # filter stays at HIGH,CRITICAL so the output volume remains usable.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract pinned image refs from variables.tf
+        id: images
+        run: |
+          set -euo pipefail
+          n8n=$(grep -oE 'docker\.n8n\.io/n8nio/n8n:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
+          cf=$(grep -oE 'cloudflare/cloudflared:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
+          echo "n8n=$n8n" >> "$GITHUB_OUTPUT"
+          echo "cloudflared=$cf" >> "$GITHUB_OUTPUT"
+          echo "resolved: n8n=$n8n"
+          echo "resolved: cloudflared=$cf"
+
+      # Pinned to v0.36.0 (2026-04-22 release). aquasecurity migrated to
+      # v-prefixed tags after a prior supply-chain incident; using the
+      # v-prefixed tag ensures we're on the post-migration lineage.
+      - name: Trivy — n8n image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.images.outputs.n8n }}
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: true
+          vuln-type: os,library
+
+      - name: Trivy — cloudflared image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.images.outputs.cloudflared }}
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: true
+          vuln-type: os,library
