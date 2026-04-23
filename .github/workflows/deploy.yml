@@ -73,6 +73,12 @@ jobs:
           # literal default kicks in instead of being overwritten by "".
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
+          # WIF attribute-condition pinning + runbook URL rendering both
+          # reference this repo's GitHub identity. Derived from the
+          # workflow's own `github.repository` context so forks inherit
+          # the correct values automatically without per-fork config.
+          TF_VAR_wif_allowed_repository: ${{ github.repository }}
+          TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -93,3 +99,5 @@ jobs:
           # with a fallback that preserves Terraform's `default = "#n8n-ops"`.
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
+          TF_VAR_wif_allowed_repository: ${{ github.repository }}
+          TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}

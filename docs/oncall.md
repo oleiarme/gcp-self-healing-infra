@@ -13,7 +13,7 @@
 
 | Role | Member | GitHub | Timezone | Notes |
 |---|---|---|---|---|
-| Primary | Kwon Kim | @kwonvkim-collab | UTC+? | Owns P1/P2 acks |
+| Primary | TBD | @tbd | UTC+? | Owns P1/P2 acks |
 | Backup | TBD | @tbd | UTC+? | Takes the pager on primary sick day / vacation |
 | Escalation | TBD (eng manager) | @tbd | UTC+? | Called if primary + backup both miss 2× ack SLA |
 
@@ -25,8 +25,8 @@
 
 | Week start (Monday, UTC) | Primary | Backup |
 |---|---|---|
-| 2026-W01 | @kwonvkim-collab | TBD |
-| 2026-W02 | @kwonvkim-collab | TBD |
+| 2026-W01 | @tbd            | TBD |
+| 2026-W02 | @tbd            | TBD |
 | …        | …                | …    |
 
 Rotation cadence: **one week**, Monday 00:00 UTC → next Monday 00:00

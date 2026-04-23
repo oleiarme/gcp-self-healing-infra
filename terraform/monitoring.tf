@@ -110,7 +110,7 @@ resource "google_monitoring_uptime_check_config" "n8n" {
 # Runbook link goes in documentation.content (proper markdown) and
 # user_labels carry only a label-safe slug for filtering.
 locals {
-  runbook_url_md = "[Runbook](https://github.com/kwonvkim-collab/gcp-self-healing-infra/blob/main/Runbook.md)"
+  runbook_url_md = "[Runbook](${var.github_repository_url}/blob/main/Runbook.md)"
 }
 
 resource "google_monitoring_alert_policy" "slo_fast_burn" {

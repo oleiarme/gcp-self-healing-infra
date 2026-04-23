@@ -161,7 +161,7 @@ HC state, MIG size, startup failures over time.
   Dependabot cannot do this because its `docker` ecosystem only scans
   Dockerfiles / docker-compose files, neither of which exist in this repo.
 * **WIF attribute condition.** Constrain the WIF pool binding to
-  `assertion.repository_owner == "kwonvkim-collab" && assertion.ref == "refs/heads/main"`.
+  `assertion.repository_owner == "<YOUR_GH_OWNER>" && assertion.ref == "refs/heads/main"`.
   If the pool is provisioned out-of-band, document the exact gcloud command
   in README's `### Security posture`.
 * **`prevent_destroy` on secrets.** `lifecycle { prevent_destroy = true }`
@@ -178,7 +178,7 @@ HC state, MIG size, startup failures over time.
 ### Security posture
 
 - **Auth to GCP:** Workload Identity Federation with attribute condition
-  pinning deploys to `kwonvkim-collab/main`.
+  pinning deploys to `<YOUR_GH_OWNER>/main`.
 - **VM identity:** dedicated `n8n-app-sa` with three explicit role bindings
   (`secretmanager.secretAccessor` per-secret, `logging.logWriter`,
   `monitoring.metricWriter`). No `cloud-platform` scope.

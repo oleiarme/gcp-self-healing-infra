@@ -214,9 +214,13 @@ variable "cloudflared_image" {
 # wif_attribute_condition` so an operator can copy-paste it straight
 # into `gcloud iam workload-identity-pools providers update-oidc`.
 variable "wif_allowed_repository" {
-  description = "Fully-qualified GitHub repository (owner/name) allowed to assume the WIF provider."
+  description = "Fully-qualified GitHub repository (owner/name) allowed to assume the WIF provider. Set per-fork in .tfvars or TF_VAR_wif_allowed_repository."
   type        = string
-  default     = "kwonvkim-collab/gcp-self-healing-infra"
+}
+
+variable "github_repository_url" {
+  description = "HTTPS URL of this repository on GitHub. Used to render runbook/dashboard links in alert policies. Set per-fork in .tfvars or TF_VAR_github_repository_url (e.g. https://github.com/<owner>/gcp-self-healing-infra)."
+  type        = string
 }
 
 variable "wif_allowed_ref" {

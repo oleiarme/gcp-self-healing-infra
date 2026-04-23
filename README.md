@@ -104,7 +104,7 @@ The WIF provider is created out-of-band (not in this repo) but **must** be creat
 gcloud iam workload-identity-pools providers update-oidc github \
   --workload-identity-pool=github-pool \
   --location=global \
-  --attribute-condition='assertion.repository == "kwonvkim-collab/gcp-self-healing-infra" && assertion.ref == "refs/heads/main"'
+  --attribute-condition='assertion.repository == "<YOUR_GH_OWNER>/gcp-self-healing-infra" && assertion.ref == "refs/heads/main"'
 ```
 
 Without this condition, **any fork** could mint a token for the deploy SA. With it, only pushes on `main` of this repo can.

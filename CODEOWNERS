@@ -1,4 +1,4 @@
-# CODEOWNERS for kwonvkim-collab/gcp-self-healing-infra
+# CODEOWNERS
 #
 # Phase 6 of docs/slo-roadmap.md. Enforces review on the small set of
 # paths whose misconfiguration has outsized blast radius. Deliberately
@@ -8,43 +8,44 @@
 # Syntax: <pattern> <@owner> [<@owner> ...]
 # Patterns follow .gitignore globbing; last-match wins.
 #
-# NOTE: the repo is currently single-maintainer. Every rule below
-# requests review from @kwonvkim as the effective on-call. When a
-# second reviewer is onboarded, split by path (e.g. terraform/ →
-# @infra-team, docs/ → @docs-team).
+# IMPORTANT: replace the `@OWNER` placeholder below with the GitHub
+# user or team that should review changes to hot paths. If this file
+# lands in a fork without a real handle, GitHub silently skips
+# CODEOWNER review — which defeats the point. Use a team (e.g.
+# `@your-org/infra`) rather than a single user wherever possible.
 
-# Default: all changes reviewable by the current maintainer.
-*                                                @kwonvkim
+# Default: all changes reviewable by the designated owner.
+*                                                @OWNER
 
 # -------------------------------------------------------------------
 # Hard requirements — must have CODEOWNER review, no self-merge.
 # -------------------------------------------------------------------
 
 # All Terraform: state mutations ship through here.
-/terraform/                                      @kwonvkim
+/terraform/                                      @OWNER
 
 # State bucket bootstrap: misconfig here makes state unrecoverable.
-/terraform/bootstrap/                            @kwonvkim
+/terraform/bootstrap/                            @OWNER
 
 # Cloud SQL as code: touches the data tier.
-/terraform/cloud_sql.tf                          @kwonvkim
+/terraform/cloud_sql.tf                          @OWNER
 
 # CI workflows: a broken workflow masks every other check.
-/.github/workflows/                              @kwonvkim
+/.github/workflows/                              @OWNER
 
 # Required-secrets inventory + deploy gate.
-/.github/workflows/deploy.yml                    @kwonvkim
+/.github/workflows/deploy.yml                    @OWNER
 
 # Startup script: the VM's entire bootstrap logic lives here.
-/scripts/startup.sh                              @kwonvkim
+/scripts/startup.sh                              @OWNER
 
 # Image digest pinning: supply-chain trust anchor.
-/scripts/refresh-digests.sh                      @kwonvkim
+/scripts/refresh-digests.sh                      @OWNER
 
 # Incident response playbooks — wrong procedure is worse than no
 # procedure.
-/Runbook.md                                      @kwonvkim
-/docs/postmortems/                               @kwonvkim
-/docs/oncall.md                                  @kwonvkim
-/docs/error-budget-policy.md                     @kwonvkim
-/docs/drills/                                    @kwonvkim
+/Runbook.md                                      @OWNER
+/docs/postmortems/                               @OWNER
+/docs/oncall.md                                  @OWNER
+/docs/error-budget-policy.md                     @OWNER
+/docs/drills/                                    @OWNER
