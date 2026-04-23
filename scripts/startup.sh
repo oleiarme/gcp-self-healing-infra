@@ -14,7 +14,7 @@ APT_INSTALL_OPTS=(-y \
 
 echo "=== Swap ==="
 if [ ! -f /swapfile ]; then
-  fallocate -l 2G /swapfile
+  fallocate -l 4G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
@@ -58,18 +58,16 @@ mkdir -p /etc/systemd/system/containerd.service.d
 cat <<EOF > /etc/systemd/system/docker.service.d/throttle.conf
 [Service]
 CPUAccounting=true
-CPUQuota=85%
 TimeoutStartSec=180
 EOF
 
 cat <<EOF > /etc/systemd/system/containerd.service.d/throttle.conf
 [Service]
 CPUAccounting=true
-CPUQuota=85%
 TimeoutStartSec=180
 EOF
 
-sysctl -w vm.swappiness=10
+sysctl -w vm.swappiness=60
 systemctl daemon-reload
 systemctl restart containerd
 sleep 5
