@@ -139,8 +139,8 @@ resource "google_monitoring_alert_policy" "slo_fast_burn" {
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | align fraction_true(1h)
-        | condition val() < 0.928
+        | group_by sliding(1h), [fraction: fraction_true(val())]
+        | condition fraction < 0.928
       MQL
       trigger {
         count = 1
@@ -180,8 +180,8 @@ resource "google_monitoring_alert_policy" "slo_slow_burn" {
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | align fraction_true(6h)
-        | condition val() < 0.97
+        | group_by sliding(6h), [fraction: fraction_true(val())]
+        | condition fraction < 0.97
       MQL
       trigger {
         count = 1
@@ -289,7 +289,7 @@ resource "google_monitoring_alert_policy" "log_ingestion_absent" {
     display_name = "no startup_log entries ingested for 24h"
     condition_absent {
       filter   = "metric.type=\"logging.googleapis.com/log_entry_count\" resource.type=\"gce_instance\" metric.label.\"log\"=\"startup_log\""
-      duration = "86400s" # 24h
+      duration = "84600s" # 24h
       trigger {
         count = 1
       }
