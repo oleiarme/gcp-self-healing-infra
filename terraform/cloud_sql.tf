@@ -202,15 +202,10 @@ resource "google_sql_database_instance" "main" {
 }
 
 resource "google_sql_database" "n8n" {
-  count = local.cloud_sql_enabled ? 1 : 0
-
-  name     = "postgres"
+  count    = local.cloud_sql_enabled ? 1 : 0
+  name     = "n8n"
   instance = google_sql_database_instance.main[0].name
   project  = var.project_id
-
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 resource "google_sql_user" "n8n" {

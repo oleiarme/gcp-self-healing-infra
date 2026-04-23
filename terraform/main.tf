@@ -307,7 +307,7 @@ resource "google_compute_instance_template" "tpl" {
       DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
       N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
       CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
-      db_name               = "postgres"
+      db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
       db_port               = "5432"
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
