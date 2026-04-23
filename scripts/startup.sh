@@ -150,15 +150,15 @@ cd /opt/n8n
 cat <<EOF > docker-compose.yml
 services:
   n8n:
-    image: docker.n8n.io/n8nio/n8n:2.16.1
+    image: ${n8n_image}
     restart: unless-stopped
     ports:
-      - "5678:5678"
+        - "127.0.0.1:5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: ${db_host}
       DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: postgres
+      DB_POSTGRESDB_DATABASE: ${db_name}
       DB_POSTGRESDB_USER: ${db_user}
       DB_POSTGRESDB_PASSWORD: \$DB_PASSWORD
       N8N_ENCRYPTION_KEY: \$N8N_KEY
@@ -175,26 +175,25 @@ services:
       # 'Failed to connect to n8n task broker at 127.0.0.1:5679'.
       # Фиксируем явно, чтобы поведение не зависело от дефолтов образа;
       # если Code-node не нужен — поставь N8N_RUNNERS_ENABLED: "false".
-      N8N_RUNNERS_ENABLED: "true"
-      N8N_RUNNERS_MODE: internal
-      N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 127.0.0.1
-      N8N_RUNNERS_BROKER_PORT: 5679
+      # Keep cold-start light on small VMs. Re-enable only after boot is stable.
+      N8N_RUNNERS_ENABLED: "false"
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
       # GCP probes every 10s; if Docker also checks every 10s there is no
       # stale-health window where GCP reads healthy while n8n is already dead.
       # start_period 420s covers cold DB migrations on e2-micro.
-      test: ["CMD", "curl", "-sf", "http://localhost:5678/healthz"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:5678/healthz"]
       interval: 10s
       timeout: 15s
       retries: 10
       start_period: 420s
 
   cloudflared:
-    # [FIX 3] см. выше — литерал вместо непрокинутой переменной.
-    image: cloudflare/cloudflared:2026.3.0
+    image: ${cloudflared_image}
     restart: unless-stopped
     command: tunnel --metrics 0.0.0.0:2000 run
+    ports:
+      - "127.0.0.1:2000:2000"
     environment:
       TUNNEL_TOKEN: \$CF_TOKEN
     healthcheck:
@@ -217,9 +216,18 @@ EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
-echo "=== Pulling containers ==="
-# На e2-micro pull может занять вечность, увеличиваем таймаут
-retry timeout 1800 docker compose pull
+echo "=== Cleaning package cache before image pull ==="
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+
+
+
+echo "=== Pulling n8n image ==="
+retry timeout 1800 docker pull "${n8n_image}"
+
+
+echo "=== Pulling cloudflared image ==="
+retry timeout 600 docker pull "${cloudflared_image}"
 
 echo "=== Starting Containers ==="
 docker compose up -d
@@ -243,11 +251,11 @@ last_fail="both n8n and cloudflared"
 for i in {1..60}; do
   n8n_ok=false
   cf_ok=false
-  if curl -sf http://localhost:5678/healthz >/dev/null; then
+  if curl -sf http://127.0.0.1:5678/healthz >/dev/null; then
     n8n_ok=true
   fi
-  if docker compose logs cloudflared | grep -q "Registered tunnel connection"; then
-    cf_ok=true
+  if curl -fsS http://127.0.0.1:2000/ready >/dev/null; then
+  cf_ok=true
   fi
   if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
     echo "✅ n8n + cloudflared are up and healthy"
