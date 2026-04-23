@@ -14,7 +14,7 @@ on:
 
 jobs:
   terraform:
-    name: Terraform validate & fmt
+    name: Validate & Lint
     runs-on: ubuntu-latest
     defaults:
       run:
