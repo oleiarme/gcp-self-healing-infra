@@ -20,10 +20,10 @@ jobs:
       run:
         working-directory: ./terraform
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
 
       # -backend=false — no real GCS bucket needed for validation
       - name: Terraform Init
@@ -40,7 +40,7 @@ jobs:
     name: Shellcheck scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run shellcheck
         # SC2154 suppressed: startup.sh is a Terraform templatefile and the
@@ -52,8 +52,8 @@ jobs:
     name: tflint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: actions/checkout@v6
+      - uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: latest
       - name: tflint --init
@@ -68,7 +68,7 @@ jobs:
     name: tfsec
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run tfsec
         # tfsec scans Terraform for security misconfigurations (open ports,
         # plaintext secrets, missing encryption, public buckets, etc.). The
@@ -84,7 +84,7 @@ jobs:
     name: checkov
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run Checkov
         # Checkov is an additional policy scanner — overlap with tfsec is
         # intentional (defence in depth, different rule sets). Quiet mode
@@ -122,7 +122,7 @@ jobs:
     # owner for quarterly review), set exit-code back to "1". Severity
     # filter stays at HIGH,CRITICAL so the output volume remains usable.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Extract pinned image refs from variables.tf
         id: images
