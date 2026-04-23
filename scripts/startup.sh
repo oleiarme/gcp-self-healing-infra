@@ -2,8 +2,7 @@
 set -e
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
-# [FIX 1] Вернуть из PR #10: non-interactive apt 
- --force-confold/confdef.
+# [FIX 1] Вернуть из PR #10: non-interactive apt.
 # Без этого dpkg может EOF'ить на stdin при конфликте conffile и валить
 # весь bootstrap. Имена стабильные, чтобы terraform templatefile()
 # с двойным $ не поломал рендер.
