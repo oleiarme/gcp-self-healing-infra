@@ -371,7 +371,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
     # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
     # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
     # (no initial_delay on the replacement path, only detection + startup).
-    initial_delay_sec = 1200
+    initial_delay_sec = 1800
   }
 
   update_policy {

@@ -176,15 +176,17 @@ services:
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
 
       N8N_RUNNERS_ENABLED: "false"
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
+      
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
       # GCP probes every 10s; if Docker also checks every 10s there is no
       # stale-health window where GCP reads healthy while n8n is already dead.
       # start_period 420s covers cold DB migrations on e2-micro.
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:5678/healthz"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5678"]
       interval: 10s
-      timeout: 15s
-      retries: 10
+      timeout: 5s
+      retries: 5
       start_period: 420s
 
   cloudflared:
