@@ -195,7 +195,7 @@ variable "slack_channel" {
 variable "n8n_image" {
   description = "n8n container image, including registry, repo, tag and SHA256 digest. Used by scripts/startup.sh in the docker-compose service definition."
   type        = string
-  default     = "docker.n8n.io/n8nio/n8n:2.16.1@sha256:ad20607cdd24bac004ec44804b6b8ded9a2fbf92ed46c4496bf007762c883af2"
+  default     = "docker.n8n.io/n8nio/n8n:2.17.6@sha256:52e1870b45f0a84e8adeb5f5d9c6ac37cfdeed2a711c22355e26ddd8ccdd161a"
 }
 
 variable "cloudflared_image" {
