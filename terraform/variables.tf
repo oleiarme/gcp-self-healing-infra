@@ -193,7 +193,7 @@ variable "slack_channel" {
 #        https://<registry>/v2/<repo>/manifests/<tag>  # registry HTTP API
 
 variable "n8n_image" {
-  description = "n8n container image, including registry, repo, tag and SHA256 digest. Used by scripts/startup.sh in the docker-compose service definition."
+  description = "Pinned n8n container image (tag@digest). Managed by Renovate; release notes: https://github.com/n8n-io/n8n/releases"
   type        = string
   default     = "docker.n8n.io/n8nio/n8n:2.17.6@sha256:52e1870b45f0a84e8adeb5f5d9c6ac37cfdeed2a711c22355e26ddd8ccdd161a"
 }

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "timezone": "UTC",
+  "schedule": [
+    "before 9am on monday"
+  ],
+  "labels": [
+    "dependencies",
+    "renovate"
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "platformAutomerge": true,
+  "rebaseWhen": "behind-base-branch",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track docker image defaults declared in terraform/variables.tf (annotated with `# renovate: datasource=... depName=...`).",
+      "fileMatch": [
+        "^terraform/variables\\.tf$"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*default\\s*=\\s*\"[^:]+:(?<currentValue>[^@\"]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?\""
+      ],
+      "datasourceTemplate": "{{{datasource}}}"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Auto-merge patch/minor/digest upgrades once CI is green. Major bumps require manual review (breaking changes).",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pin",
+        "pinDigest",
+        "patch",
+        "minor"
+      ],
+      "automerge": true,
+      "pinDigests": true
+    },
+    {
+      "description": "Major upgrades: open PR but do not auto-merge. Read n8n release notes for breaking changes.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "labels": [
+        "dependencies",
+        "renovate",
+        "major-upgrade",
+        "review-required"
+      ]
+    },
+    {
+      "description": "Group digest-only refreshes (same tag, new digest) to reduce PR noise.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "groupName": "container digest refresh"
+    }
+  ]
+}
