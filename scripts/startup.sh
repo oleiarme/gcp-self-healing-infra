@@ -176,7 +176,6 @@ services:
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
 
       N8N_RUNNERS_ENABLED: "false"
-      N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
       
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
