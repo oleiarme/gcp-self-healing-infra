@@ -232,13 +232,13 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 5678
-    request_path = "/healthz"
+    request_path = "/"
   }
 
   check_interval_sec  = 10
-  timeout_sec         = 5
+  timeout_sec         = 10
   healthy_threshold   = 2
-  unhealthy_threshold = 5
+  unhealthy_threshold = 7
 }
 
 resource "google_compute_instance_template" "tpl" {
