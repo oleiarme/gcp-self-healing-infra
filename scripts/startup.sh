@@ -160,22 +160,21 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: ${db_name}
       DB_POSTGRESDB_USER: ${db_user}
-      DB_POSTGRESDB_PASSWORD: \$DB_PASSWORD
-      N8N_ENCRYPTION_KEY: \$N8N_KEY
+      DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
+
+      N8N_ENCRYPTION_KEY: $N8N_KEY
+
       EXECUTIONS_MODE: regular
+      EXECUTIONS_PROCESS: main
+
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
       N8N_LOG_LEVEL: error
+
       EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: true
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
-      # [FIX 5] Task-runner'ы в 2.x включены по умолчанию и слушают broker
-      # на 127.0.0.1:5679. На cold-start e2-micro JS-runner успевает
-      # форкнуться раньше, чем broker начнёт listen — и в логи падает
-      # 'Failed to connect to n8n task broker at 127.0.0.1:5679'.
-      # Фиксируем явно, чтобы поведение не зависело от дефолтов образа;
-      # если Code-node не нужен — поставь N8N_RUNNERS_ENABLED: "false".
-      # Keep cold-start light on small VMs. Re-enable only after boot is stable.
+
       N8N_RUNNERS_ENABLED: "false"
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
