@@ -177,11 +177,11 @@ services:
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
 
       N8N_RUNNERS_ENABLED: "false"
-      logging:
-        driver: "json-file"
-        options:
-          max-size: "10m"
-          max-file: "3"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
       
     healthcheck:
       # 10s matches GCP health check check_interval_sec in terraform/main.tf.
