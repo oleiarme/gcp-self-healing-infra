@@ -144,43 +144,6 @@ EOF
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
 
-if false; then
-  echo "=== Restore latest backup (safe) ==="
-
-  LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/*.sql 2>/dev/null | sort | tail -n 1)
-
-  if [ -n "$LATEST" ]; then
-    CHECKSUM="$LATEST.sha256"
-    FILENAME=$(basename "$LATEST")
-
-    echo "Found backup: $LATEST"
-
-    if gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
-
-      if gsutil cp "$LATEST" "/tmp/$FILENAME" && \
-         gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"; then
-
-        echo "Verifying checksum..."
-
-        if (cd /tmp && sha256sum -c "$FILENAME.sha256"); then
-          echo "Checksum OK"
-        else
-          echo "⚠️ Restore skipped: checksum failed"
-        fi
-
-      else
-        echo "⚠️ Restore skipped: download failed"
-      fi
-
-    else
-      echo "⚠️ Restore skipped: checksum missing"
-    fi
-
-  else
-    echo "No backup found"
-  fi
-fi
-
 cat <<EOF > docker-compose.yml
 services:
   postgres:
@@ -301,55 +264,50 @@ if [ "$READY" != "true" ]; then
 fi
 
 
-if [ -f /tmp/restore.sql ]; then
-  echo "=== Restoring database (safe mode) ==="
 
-  RESTORE_MARKER="/opt/n8n/.restore_done"
+echo "=== Restore latest backup ==="
 
-  if [ -f "$RESTORE_MARKER" ]; then
-    echo "⚠️ Restore already done ранее → skip"
-    rm -f /tmp/restore.sql /tmp/restore.sql.sha256
+LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/n8n-*.sql 2>/dev/null | sort | tail -n 1)
 
-  else
+echo "LATEST backup: $LATEST"
 
-    SCHEMA_VERSION=$(docker compose exec -T postgres psql -U n8n -d n8n -t -c \
-      "SELECT MAX(id) FROM migrations;" 2>/dev/null | xargs || echo "0")
-
-    echo "Schema version: $SCHEMA_VERSION"
-
-    if [ "$SCHEMA_VERSION" != "0" ]; then
-      echo "⚠️ Schema already initialized → skip restore"
-      rm -f /tmp/restore.sql /tmp/restore.sql.sha256
-
-    else
-      echo "Running dry-run..."
-
-      if ! timeout 600 bash -c '(
-  echo "BEGIN;";
-  cat /tmp/restore.sql;
-  echo "ROLLBACK;";
-) | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U n8n -d n8n'; then
-        echo "❌ Dry-run failed, aborting restore"
-        rm -f /tmp/restore.sql /tmp/restore.sql.sha256
-        exit 1
-      fi
-      echo "Applying restore..."
-
-      if ! timeout 600 bash -c 'cat /tmp/restore.sql | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U n8n -d n8n'; then
-        echo "❌ Restore failed"
-        exit 1
-      fi
-
-      echo "✅ Restore complete"
-
-      touch "$RESTORE_MARKER"
-      rm -f /tmp/restore.sql /tmp/restore.sql.sha256
-    fi
-  fi
-
-else
-  echo "No restore file"
+if [ -z "$LATEST" ]; then
+  echo "❌ CRITICAL: No backup found in GCS"
+  exit 1
 fi
+
+CHECKSUM="$LATEST.sha256"
+FILENAME=$(basename "$LATEST")
+
+echo "Found backup: $LATEST"
+
+if ! gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
+  echo "❌ Checksum missing"
+  exit 1
+fi
+
+echo "Downloading backup..."
+gsutil cp "$LATEST" "/tmp/$FILENAME"
+gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"
+
+echo "Verifying checksum..."
+if ! (cd /tmp && sha256sum -c "$FILENAME.sha256"); then
+  echo "❌ Checksum failed"
+  exit 1
+fi
+
+echo "Checksum OK"
+
+echo "Dropping DB..."
+docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
+docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+
+echo "Restoring DB..."
+cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
+
+echo "✅ Restore complete"
+
+rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
 
 echo "=== Verifying n8n startup ==="
 
