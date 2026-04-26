@@ -208,9 +208,7 @@ services:
       N8N_ENCRYPTION_KEY: $N8N_KEY
 
       N8N_EXECUTIONS_MODE: regular
-      EXECUTIONS_PROCESS: main
-      N8N_DISABLE_PRODUCTION_MAIN_PROCESS: "true"
-
+      
       N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
       N8N_LOG_LEVEL: error
 
@@ -219,7 +217,8 @@ services:
       EXECUTIONS_DATA_PRUNE: true
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
 
-      N8N_RUNNERS_ENABLED: "false"
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_RUNNERS_MODE: internal
     logging:
       driver: "json-file"
       options:
