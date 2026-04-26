@@ -144,41 +144,41 @@ EOF
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
 
-echo "=== Restore latest backup (safe) ==="
+if false; then
+  echo "=== Restore latest backup (safe) ==="
 
-LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/*.sql 2>/dev/null | sort | tail -n 1)
-if [ -n "$LATEST" ]; then
-  CHECKSUM="$LATEST.sha256"
+  LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/*.sql 2>/dev/null | sort | tail -n 1)
 
-  echo "Found backup: $LATEST"
+  if [ -n "$LATEST" ]; then
+    CHECKSUM="$LATEST.sha256"
+    FILENAME=$(basename "$LATEST")
 
-  if ! gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
-    echo "⚠️ Checksum missing → skipping restore"
-    rm -f /tmp/restore.sql
+    echo "Found backup: $LATEST"
+
+    if gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
+
+      if gsutil cp "$LATEST" "/tmp/$FILENAME" && \
+         gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"; then
+
+        echo "Verifying checksum..."
+
+        if (cd /tmp && sha256sum -c "$FILENAME.sha256"); then
+          echo "Checksum OK"
+        else
+          echo "⚠️ Restore skipped: checksum failed"
+        fi
+
+      else
+        echo "⚠️ Restore skipped: download failed"
+      fi
+
+    else
+      echo "⚠️ Restore skipped: checksum missing"
+    fi
+
   else
-    if ! gsutil cp "$LATEST" /tmp/restore.sql; then
-      echo "❌ Failed to download backup"
-      exit 1
-    fi
-
-    if ! gsutil cp "$CHECKSUM" /tmp/restore.sql.sha256; then
-      echo "❌ Failed to download checksum"
-      rm -f /tmp/restore.sql
-      exit 1
-    fi
-
-    echo "Verifying checksum..."
-    if ! (cd /tmp && sha256sum -c restore.sql.sha256); then
-  echo "❌ Checksum failed, aborting restore"
-  rm -f /tmp/restore.sql /tmp/restore.sql.sha256
-  exit 1
-    fi
-
-    echo "Checksum OK"
+    echo "No backup found"
   fi
-
-else
-  echo "No backup found"
 fi
 
 cat <<EOF > docker-compose.yml
@@ -450,7 +450,14 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 FILE="/tmp/n8n-$${TIMESTAMP}.sql"
 CHECKSUM_FILE="$${FILE}.sha256"
 
-timeout 300 docker exec n8n-postgres-1 pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
+POSTGRES_CONTAINER=$(docker ps -qf name=postgres)
+
+timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
+if [ ! -s "$FILE" ]; then
+  echo "❌ EMPTY BACKUP"
+  exit 1
+fi
+
 sha256sum "$FILE" > "$CHECKSUM_FILE"
 
 SUCCESS=false
