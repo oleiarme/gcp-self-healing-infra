@@ -450,7 +450,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 FILE="/tmp/n8n-$${TIMESTAMP}.sql"
 CHECKSUM_FILE="$${FILE}.sha256"
 
-timeout 300 docker compose exec -T postgres pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
+timeout 300 docker exec n8n-postgres-1 pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
 sha256sum "$FILE" > "$CHECKSUM_FILE"
 
 SUCCESS=false
