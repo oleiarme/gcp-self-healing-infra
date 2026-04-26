@@ -97,12 +97,7 @@ echo "✅ All secrets fetched successfully."
 
 # Создаем файл .env для гарантированной передачи секретов в Docker
 mkdir -p /opt/n8n
-cat <<EOF > /opt/n8n/.env
-DB_PASSWORD=$${DB_PASSWORD}
-N8N_KEY=$${N8N_KEY}
-CF_TOKEN=$${CF_TOKEN}
-EOF
-chmod 600 /opt/n8n/.env
+
 
 export CF_TOKEN
 export N8N_KEY
@@ -293,7 +288,7 @@ retry timeout 600 docker pull "${cloudflared_image}"
 
 
 echo "=== Starting Containers ==="
-docker compose --env-file /opt/n8n/.env up -d || {
+docker compose up -d || {
   echo "❌ docker compose up failed"
   docker compose logs --tail=100
   exit 1
