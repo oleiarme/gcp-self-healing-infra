@@ -17,7 +17,9 @@ if [ ! -f /swapfile ]; then
   fallocate -l 4G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
+  if ! swapon --show | grep -q /swapfile; then
   swapon /swapfile
+  fi
   echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
@@ -31,7 +33,7 @@ retry() {
 
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install -y ca-certificates curl gnupg docker.io
+retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
@@ -67,7 +69,7 @@ CPUAccounting=true
 TimeoutStartSec=180
 EOF
 
-sysctl -w vm.swappiness=60
+sysctl -w vm.swappiness=10
 systemctl daemon-reload
 systemctl restart containerd
 sleep 5
@@ -95,12 +97,7 @@ echo "✅ All secrets fetched successfully."
 
 # Создаем файл .env для гарантированной передачи секретов в Docker
 mkdir -p /opt/n8n
-cat <<EOF > /opt/n8n/.env
-DB_PASSWORD=$${DB_PASSWORD}
-N8N_KEY=$${N8N_KEY}
-CF_TOKEN=$${CF_TOKEN}
-EOF
-chmod 600 /opt/n8n/.env
+
 
 export CF_TOKEN
 export N8N_KEY
@@ -147,8 +144,54 @@ EOF
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
 
+echo "=== Restore latest backup (safe) ==="
+
+LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/*.sql 2>/dev/null | sort | tail -n 1)
+if [ -n "$LATEST" ]; then
+  CHECKSUM="$LATEST.sha256"
+
+  echo "Found backup: $LATEST"
+
+  if ! gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
+    echo "⚠️ Checksum missing → skipping restore"
+    rm -f /tmp/restore.sql
+  else
+    if ! gsutil cp "$LATEST" /tmp/restore.sql; then
+      echo "❌ Failed to download backup"
+      exit 1
+    fi
+
+    if ! gsutil cp "$CHECKSUM" /tmp/restore.sql.sha256; then
+      echo "❌ Failed to download checksum"
+      rm -f /tmp/restore.sql
+      exit 1
+    fi
+
+    echo "Verifying checksum..."
+    if ! (cd /tmp && sha256sum -c restore.sql.sha256); then
+  echo "❌ Checksum failed, aborting restore"
+  rm -f /tmp/restore.sql /tmp/restore.sql.sha256
+  exit 1
+    fi
+
+    echo "Checksum OK"
+  fi
+
+else
+  echo "No backup found"
+fi
+
 cat <<EOF > docker-compose.yml
 services:
+  postgres:
+      image: postgres:15-alpine
+      restart: unless-stopped
+      environment:
+        POSTGRES_DB: n8n
+        POSTGRES_USER: n8n
+        POSTGRES_PASSWORD: $DB_PASSWORD
+      volumes:
+        - postgres_data:/var/lib/postgresql/data
   n8n:
     image: ${n8n_image}
     restart: unless-stopped
@@ -156,10 +199,10 @@ services:
         - "127.0.0.1:5678:5678"
     environment:
       DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: ${db_host}
+      DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: ${db_name}
-      DB_POSTGRESDB_USER: ${db_user}
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
       DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
 
       N8N_ENCRYPTION_KEY: $N8N_KEY
@@ -188,12 +231,14 @@ services:
       # GCP probes every 10s; if Docker also checks every 10s there is no
       # stale-health window where GCP reads healthy while n8n is already dead.
       # start_period 420s covers cold DB migrations on e2-micro.
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:5678"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5678/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 420s
-
+    depends_on:
+      - postgres
+        
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
@@ -213,11 +258,13 @@ services:
       # docker compose mark cloudflared unhealthy within ~1m of edge-link
       # loss, which is what the start_period 30s allows for cold-start
       # tunnel registration.
-      test: ["CMD", "cloudflared", "--version"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:2000/ready"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 30s
+volumes:
+    postgres_data:
 EOF
 
 docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
@@ -229,68 +276,220 @@ rm -rf /var/lib/apt/lists/*
 
 
 echo "=== Pulling n8n image ==="
-retry timeout 1800 docker pull "${n8n_image}"
+retry timeout 1800 docker pull "${n8n_image}" || {
+  echo "❌ Docker pull failed"
+  free -m
+  exit 1
+}
 
 
 echo "=== Pulling cloudflared image ==="
 retry timeout 600 docker pull "${cloudflared_image}"
 
+
 echo "=== Starting Containers ==="
-docker compose up -d
+docker compose up -d || {
+  echo "❌ docker compose up failed"
+  docker compose logs --tail=100
+  exit 1
+}
+
+echo "=== Waiting for Postgres ==="
+
+READY=false
+
+for i in {1..30}; do
+  if docker compose ps postgres >/dev/null 2>&1 && \
+     docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
+    echo "✅ Postgres is ready"
+    READY=true
+    break
+  fi
+
+  echo "⏳ Waiting for Postgres ($i/30)..."
+  sleep 2
+done
+
+if [ "$READY" != "true" ]; then
+  echo "❌ Postgres did not become ready in time"
+  docker compose logs postgres --tail=50
+  exit 1
+fi
+
+
+if [ -f /tmp/restore.sql ]; then
+  echo "=== Restoring database (safe mode) ==="
+
+  RESTORE_MARKER="/opt/n8n/.restore_done"
+
+  if [ -f "$RESTORE_MARKER" ]; then
+    echo "⚠️ Restore already done ранее → skip"
+    rm -f /tmp/restore.sql /tmp/restore.sql.sha256
+
+  else
+
+    SCHEMA_VERSION=$(docker compose exec -T postgres psql -U n8n -d n8n -t -c \
+      "SELECT MAX(id) FROM migrations;" 2>/dev/null | xargs || echo "0")
+
+    echo "Schema version: $SCHEMA_VERSION"
+
+    if [ "$SCHEMA_VERSION" != "0" ]; then
+      echo "⚠️ Schema already initialized → skip restore"
+      rm -f /tmp/restore.sql /tmp/restore.sql.sha256
+
+    else
+      echo "Running dry-run..."
+
+      if ! timeout 600 bash -c '(
+  echo "BEGIN;";
+  cat /tmp/restore.sql;
+  echo "ROLLBACK;";
+) | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U n8n -d n8n'; then
+        echo "❌ Dry-run failed, aborting restore"
+        rm -f /tmp/restore.sql /tmp/restore.sql.sha256
+        exit 1
+      fi
+      echo "Applying restore..."
+
+      if ! timeout 600 bash -c 'cat /tmp/restore.sql | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U n8n -d n8n'; then
+        echo "❌ Restore failed"
+        exit 1
+      fi
+
+      echo "✅ Restore complete"
+
+      touch "$RESTORE_MARKER"
+      rm -f /tmp/restore.sql /tmp/restore.sql.sha256
+    fi
+  fi
+
+else
+  echo "No restore file"
+fi
 
 echo "=== Verifying n8n startup ==="
-# n8n must be /healthz-green AND cloudflared's tunnel must be registered
-# with the edge. Historically this loop only checked n8n, so a silently-
-# failed cloudflared would let startup.sh exit 0 even though the external
-# SLI probe (which goes through the tunnel) was guaranteed to fail. Both
-# checks must succeed simultaneously in the same iteration, otherwise
-# the loop keeps waiting.
+
 HEALTHY=false
-# Track which probe was the last to fail so the CRITICAL message —
-# which feeds the n8n_startup_critical log-based metric and the on-call
-# pager — names the actually-failing component instead of blaming n8n
-# every time. The log-based metric filter in monitoring.tf matches on
-# the substring "CRITICAL: " so the counter keeps working regardless
-# of which of the two suffixes we print.
 last_fail="both n8n and cloudflared"
-# 60 попыток по 10 секунд = 10 минут ожидания
+
 for i in {1..60}; do
   n8n_ok=false
   cf_ok=false
-  if curl -sf http://127.0.0.1:5678/healthz >/dev/null; then
+
+  # Проверяем, что контейнеры вообще запущены
+  n8n_running=false
+  cf_running=false
+
+  if docker compose ps --services --filter "status=running" | grep -q '^n8n$'; then
+  
+  n8n_running=true
+  fi
+
+  if docker compose ps --services --filter "status=running" | grep -q '^cloudflared$'; then
+    cf_running=true
+  fi
+
+  # Проверка n8n
+  if [ "$n8n_running" = true ] && \
+     curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     n8n_ok=true
   fi
-  if curl -fsS http://127.0.0.1:2000/ready >/dev/null; then
-  cf_ok=true
+
+  # Проверка cloudflared
+  if [ "$cf_running" = true ] && \
+     curl -fsS http://127.0.0.1:2000/ready >/dev/null 2>&1; then
+    cf_ok=true
   fi
+
+  # Успех
   if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
     echo "✅ n8n + cloudflared are up and healthy"
     HEALTHY=true
     break
   fi
-  if [ "$n8n_ok" = false ] && [ "$cf_ok" = false ]; then
+
+  # Диагностика
+  if [ "$n8n_running" = false ] || [ "$cf_running" = false ]; then
+    last_fail="containers not running"
+  elif [ "$n8n_ok" = false ] && [ "$cf_ok" = false ]; then
     last_fail="both n8n and cloudflared"
   elif [ "$n8n_ok" = false ]; then
     last_fail="n8n"
   else
     last_fail="cloudflared"
   fi
-  echo "⏳ Waiting for n8n + cloudflared to initialize ($i/60, last fail: $last_fail)..."
+
+  echo "⏳ Waiting ($i/60): $last_fail..."
   sleep 10
 done
 
 if [ "$HEALTHY" = true ]; then
   echo "=== Startup complete ==="
   docker compose ps
-  exit 0
+
 else
-  # IMPORTANT: keep the exact substring "CRITICAL: startup failed" —
-  # the log-based metric n8n_startup_critical in terraform/monitoring.tf
-  # filters on it. The per-component detail ("n8n" / "cloudflared" /
-  # "both") follows after an em-dash so on-call can triage without
-  # opening logs, while the metric stays stable regardless of which
-  # component failed.
   echo "❌ CRITICAL: startup failed — $last_fail did not become healthy within 10 minutes"
-  docker compose logs --tail=100
+
+  echo "=== n8n logs ==="
+  docker compose logs --tail=50 n8n
+
+  echo "=== cloudflared logs ==="
+  docker compose logs --tail=50 cloudflared
+
   exit 1
 fi
+
+echo "=== Setup Backup Cron ==="
+
+cat <<'EOF' > /usr/local/bin/backup.sh
+#!/bin/bash
+set -e
+cd /opt/n8n || exit 1
+
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+FILE="/tmp/n8n-$${TIMESTAMP}.sql"
+CHECKSUM_FILE="$${FILE}.sha256"
+
+timeout 300 docker compose exec -T postgres pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
+sha256sum "$FILE" > "$CHECKSUM_FILE"
+
+SUCCESS=false
+for i in {1..3}; do
+  if gsutil cp -n "$FILE" gs://n8n-backups-idealist426118/n8n/; then
+    SUCCESS=true
+    break
+  fi
+  sleep 5
+done
+
+if [ "$SUCCESS" != "true" ]; then
+  echo "❌ BACKUP FAILED"
+  exit 1
+fi
+
+CHECKSUM_OK=false
+for i in {1..3}; do
+  if gsutil cp "$CHECKSUM_FILE" gs://n8n-backups-idealist426118/n8n/; then
+    CHECKSUM_OK=true
+    break
+  fi
+  sleep 5
+done
+
+if [ "$CHECKSUM_OK" != "true" ]; then
+  echo "❌ CHECKSUM UPLOAD FAILED"
+  exit 1
+fi
+
+rm -f "$FILE" "$CHECKSUM_FILE"
+
+echo "BACKUP_OK $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+EOF
+
+chmod +x /usr/local/bin/backup.sh
+
+echo "*/10 * * * * root flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
+systemctl restart cron
+
+echo "=== ALL DONE ==="
+exit 0
