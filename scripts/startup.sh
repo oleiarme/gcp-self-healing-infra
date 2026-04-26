@@ -248,22 +248,6 @@ services:
       - "127.0.0.1:2000:2000"
     environment:
       TUNNEL_TOKEN: \$CF_TOKEN
-    healthcheck:
-      # cloudflared exposes a /ready endpoint on its metrics port whenever
-      # it has at least one registered connection to the Cloudflare edge.
-      # Without this healthcheck, a silently-dead cloudflared would keep
-      # n8n reachable only from inside the VM — the external uptime check
-      # would catch it eventually, but Docker's own restart policy never
-      # gets a chance to trigger on anything shorter than a full crash.
-      # Probing /ready every 10s (matching n8n's healthcheck cadence) lets
-      # docker compose mark cloudflared unhealthy within ~1m of edge-link
-      # loss, which is what the start_period 30s allows for cold-start
-      # tunnel registration.
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:2000/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
 volumes:
     postgres_data:
 EOF
