@@ -231,7 +231,8 @@ services:
       # GCP probes every 10s; if Docker also checks every 10s there is no
       # stale-health window where GCP reads healthy while n8n is already dead.
       # start_period 420s covers cold DB migrations on e2-micro.
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:5678/healthz"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+
       interval: 10s
       timeout: 5s
       retries: 5
