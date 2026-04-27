@@ -281,8 +281,9 @@ resource "google_storage_bucket" "logs" {
   }
 
 }
+
+//checkov:skip=CKV_GCP_62: Terminal audit bucket
 resource "google_storage_bucket" "logs_audit" {
-  #checkov:skip=CKV_GCP_62: Logging bucket does not require access logs
   name                        = "${var.backup_bucket_name}-logs-audit"
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
