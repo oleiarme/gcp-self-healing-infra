@@ -271,6 +271,26 @@ resource "google_storage_bucket" "logs" {
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
+  versioning {
+    enabled = true
+  }
+
+  logging {
+    log_bucket        = google_storage_bucket.logs_audit.name
+    log_object_prefix = "logs-access"
+  }
+
+}
+
+resource "google_storage_bucket" "logs_audit" {
+  name                        = "${var.backup_bucket_name}-logs-audit"
+  location                    = "US-CENTRAL1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning {
+    enabled = true
+  }
 }
 
 # ==========================================
