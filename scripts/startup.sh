@@ -221,7 +221,7 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CF_TOKEN}
+    command: tunnel --no-autoupdate run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     depends_on:
