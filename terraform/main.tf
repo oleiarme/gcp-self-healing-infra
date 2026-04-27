@@ -292,7 +292,7 @@ resource "google_storage_bucket" "logs_audit" {
   versioning {
     enabled = true
   }
-}
+} 
 
 # ==========================================
 # 2. COMPUTE RESOURCES
