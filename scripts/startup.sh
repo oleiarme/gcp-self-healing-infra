@@ -267,13 +267,20 @@ fi
 
 echo "=== Restore latest backup ==="
 
-LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/n8n-*.sql 2>/dev/null | sort | tail -n 1)
+echo "=== Selecting valid backup ==="
 
-echo "LATEST backup: $LATEST"
+LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/n8n-*.sql 2>/dev/null | while read file; do
+  size=$(gsutil du "$file" | awk '{print $1}')
+  if [ "$size" -gt 500000 ]; then
+    echo "$file"
+  fi
+done | sort | tail -n 1)
+
+echo "Selected backup: $LATEST"
 
 if [ -z "$LATEST" ]; then
-  echo "❌ CRITICAL: No backup found in GCS"
-  exit 1
+  echo "⚠️ No valid backup found → starting with empty DB"
+  exit 0
 fi
 
 CHECKSUM="$LATEST.sha256"
@@ -308,6 +315,18 @@ cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
 echo "✅ Restore complete"
 
 rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
+
+echo "=== Verifying restore ==="
+
+COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
+
+echo "Workflow count: $COUNT"
+
+if [ "$COUNT" -lt 1 ]; then
+  echo "⚠️ Restore empty → skipping but continuing"
+else
+  echo "✅ Restore OK"
+fi
 
 echo "=== Verifying n8n startup ==="
 
@@ -393,8 +412,26 @@ FILE="/tmp/n8n-$${TIMESTAMP}.sql"
 CHECKSUM_FILE="$${FILE}.sha256"
 
 POSTGRES_CONTAINER=$(docker ps -qf name=postgres)
+if [ -z "$POSTGRES_CONTAINER" ]; then
+  echo "❌ Postgres container not found"
+  exit 1
+fi
 
-timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
+echo "=== Checking DB before backup ==="
+
+COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
+echo "Workflow count: $COUNT"
+
+SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -t -c "SELECT pg_database_size('n8n');" | xargs)
+
+echo "DB size: $SIZE"
+
+if [ "$COUNT" -lt 1 ] || [ "$SIZE" -lt 1000000 ]; then
+  echo "⚠️ SKIP backup: invalid DB (count=$COUNT size=$SIZE)"
+  exit 0
+fi
+
+timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl --clean --if-exists n8n > "$FILE"
 if [ ! -s "$FILE" ]; then
   echo "❌ EMPTY BACKUP"
   exit 1
