@@ -282,6 +282,7 @@ resource "google_storage_bucket" "logs" {
 
 }
 
+#checkov:skip=CKV_GCP_62: Terminal audit bucket
 resource "google_storage_bucket" "logs_audit" {
   name                        = "${var.backup_bucket_name}-logs-audit"
   location                    = "US-CENTRAL1"
