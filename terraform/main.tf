@@ -237,11 +237,11 @@ resource "google_storage_bucket" "backup" {
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  versioning {                                     
+  versioning {
     enabled = true
   }
 
-  logging {                                        
+  logging {
     log_bucket        = google_storage_bucket.logs.name
     log_object_prefix = "backup-access"
   }
@@ -266,7 +266,7 @@ resource "google_storage_bucket_iam_member" "backup_writer" {
   member = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
-resource "google_storage_bucket" "logs" {  
+resource "google_storage_bucket" "logs" {
   name                        = "${var.backup_bucket_name}-logs"
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
