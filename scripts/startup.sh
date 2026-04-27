@@ -229,7 +229,8 @@ services:
       environment:
         POSTGRES_DB: n8n
         POSTGRES_USER: n8n
-        POSTGRES_PASSWORD: $${DB_PASSWORD}
+        POSTGRES_PASSWORD=$(gcloud secrets versions access latest \
+  --secret="${DB_SECRET_NAME}")
       healthcheck:
         test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
         interval: 5s
