@@ -156,6 +156,7 @@ services:
       volumes:
         - postgres_data:/var/lib/postgresql/data
   n8n:
+    container_name: n8n
     image: ${n8n_image}
     restart: unless-stopped
     ports:
@@ -205,11 +206,9 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --metrics 0.0.0.0:2000 run
+    command: tunnel --no-autoupdate run --token ${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
-    environment:
-      TUNNEL_TOKEN: \$CF_TOKEN
 volumes:
     postgres_data:
 EOF
