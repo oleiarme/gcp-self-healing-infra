@@ -223,19 +223,20 @@ cd /opt/n8n
 
 cat <<'EOF' > docker-compose.yml
 services:
-  image: postgres:15-alpine
-  restart: unless-stopped
-  environment:
-    POSTGRES_DB: n8n
-    POSTGRES_USER: n8n
-    POSTGRES_PASSWORD: $${DB_PASSWORD}
-  healthcheck:
-    test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
-    interval: 5s
-    timeout: 3s
-    retries: 5
-  volumes:
-    - postgres_data:/var/lib/postgresql/data
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: $${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
   n8n:
     image: ${n8n_image}
     restart: unless-stopped
