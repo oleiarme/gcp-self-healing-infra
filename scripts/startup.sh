@@ -77,6 +77,17 @@ retry systemctl restart docker
 systemctl enable docker
 systemctl enable containerd
 
+echo "=== Waiting for Docker daemon ==="
+
+for i in {1..30}; do
+  if docker info >/dev/null 2>&1; then
+    echo "✅ Docker is ready"
+    break
+  fi
+  echo "⏳ Waiting for Docker ($i/30)..."
+  sleep 2
+done
+
 echo "=== Get Secrets from Secret Manager ==="
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
@@ -213,6 +224,9 @@ services:
     command: tunnel --no-autoupdate run --token ${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
+    depends_on:
+      n8n:
+        condition: service_healthy
 volumes:
     postgres_data:
 EOF
@@ -244,24 +258,28 @@ docker compose up -d || {
   exit 1
 }
 
-echo "=== Waiting for Postgres ==="
+echo "=== Waiting for Postgres (strict) ==="
 
 READY=false
 
-for i in {1..30}; do
+for i in {1..60}; do
   if docker compose ps postgres >/dev/null 2>&1 && \
      docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
-    echo "✅ Postgres is ready"
-    READY=true
-    break
+    
+    # дополнительная проверка: можно ли выполнить запрос
+    if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      echo "✅ Postgres fully ready"
+      READY=true
+      break
+    fi
   fi
 
-  echo "⏳ Waiting for Postgres ($i/30)..."
+  echo "⏳ Waiting for Postgres ($i/60)..."
   sleep 2
 done
 
 if [ "$READY" != "true" ]; then
-  echo "❌ Postgres did not become ready in time"
+  echo "❌ Postgres not ready"
   docker compose logs postgres --tail=50
   exit 1
 fi
@@ -269,6 +287,39 @@ fi
 
 
 echo "=== Restore latest backup ==="
+
+echo "=== Checking if DB already has data ==="
+
+DB_EXISTS=$(docker compose exec -T postgres psql -U n8n -d postgres -tAc \
+"SELECT 1 FROM pg_database WHERE datname='n8n';" | xargs)
+
+if [ "$DB_EXISTS" = "1" ]; then
+  echo "DB exists, checking content..."
+
+  TABLE_EXISTS=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+  "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
+
+  if [ "$TABLE_EXISTS" = "t" ]; then
+    WORKFLOW_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+    "SELECT COUNT(*) FROM workflow_entity;" | xargs)
+
+    echo "Existing workflows: $WORKFLOW_COUNT"
+
+    if [ "$WORKFLOW_COUNT" -gt 0 ]; then
+      echo "✅ DB already populated → SKIP restore"
+      SKIP_RESTORE=true
+    else
+      echo "⚠️ Table exists but empty → will restore"
+      SKIP_RESTORE=false
+    fi
+  else
+    echo "⚠️ No workflow table → will restore"
+    SKIP_RESTORE=false
+  fi
+else
+  echo "⚠️ DB does not exist → will restore"
+  SKIP_RESTORE=false
+fi
 
 echo "=== Selecting valid backup ==="
 
@@ -309,8 +360,12 @@ fi
 echo "Checksum OK"
 
 echo "Dropping DB..."
+if [ "$SKIP_RESTORE" != "true" ]; then
 docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
 docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+else
+  echo "=== Restore skipped ==="
+fi
 
 echo "Restoring DB..."
 cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
@@ -331,7 +386,21 @@ else
   echo "✅ Restore OK"
 fi
 
+
+echo "=== Waiting for n8n readiness ==="
+
+for i in {1..60}; do
+  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+    echo "✅ n8n is ready"
+    break
+  fi
+
+  echo "⏳ Waiting for n8n ($i/60)..."
+  sleep 5
+done
+
 echo "=== Verifying n8n startup ==="
+
 
 HEALTHY=false
 last_fail="both n8n and cloudflared"
