@@ -349,8 +349,16 @@ fi
 # Выполняем поиск бэкапа только если решили ресторить
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "=== Selecting valid backup ==="
-  # Используем переменную BACKUP_BUCKET_NAME вместо хардкода
+  echo "=== Checking backup bucket access ==="
+
+  if ! gsutil ls "gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql" >/dev/null 2>&1; then
+    echo "❌ Cannot access backup bucket or no backups found"
+    exit 1
+  fi
+  
   LATEST=$(gsutil ls gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | while read file; do
+    
+    
     size=$(gsutil du "$file" | awk '{print $1}')
     if [ "$size" -gt 500000 ]; then
       echo "$file"
