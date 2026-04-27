@@ -231,7 +231,7 @@ resource "google_compute_health_check" "hc" {
   name = "n8n-health-check"
 
   http_health_check {
-    port         = 5678
+    port         = 8080
     request_path = "/"
   }
 
@@ -259,6 +259,7 @@ resource "google_compute_instance_template" "tpl" {
   ]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
+  tags = ["n8n"]
 
 
   disk {
@@ -454,3 +455,19 @@ resource "google_billing_budget" "monthly_cap" {
 }
 
 
+resource "google_compute_firewall" "allow_health_check" {
+  name    = "allow-health-check"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+
+  source_ranges = [
+    "130.211.0.0/22",
+    "35.191.0.0/16"
+  ]
+
+  target_tags = ["n8n"]
+}
