@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
 # [FIX 1] Вернуть из PR #10: non-interactive apt.
@@ -107,12 +108,16 @@ CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NA
 echo "✅ All secrets fetched successfully."
 
 # Создаем файл .env для гарантированной передачи секретов в Docker
+echo "=== Setup Environment ==="
 mkdir -p /opt/n8n
 
+cat <<EOF > /opt/n8n/.env
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+EOF
 
-export CF_TOKEN
-export N8N_KEY
-export DB_PASSWORD
+chmod 600 /opt/n8n/.env
 
 echo "=== Install Ops Agent (logging-only, minimal receiver set) ==="
 # We deliberately ship a logging-only Ops Agent config. Host-metrics and
@@ -155,15 +160,22 @@ EOF
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
 
-cat <<EOF > docker-compose.yml
+cat <<'EOF' > docker-compose.yml
 services:
   postgres:
       image: postgres:15-alpine
       restart: unless-stopped
+      env_file:
+        - .env
       environment:
         POSTGRES_DB: n8n
         POSTGRES_USER: n8n
-        POSTGRES_PASSWORD: $DB_PASSWORD
+        POSTGRES_PASSWORD: $${DB_PASSWORD}
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U n8n"]
+        interval: 5s
+        timeout: 3s
+        retries: 5
       volumes:
         - postgres_data:/var/lib/postgresql/data
   n8n:
@@ -178,9 +190,9 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
+      DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
 
-      N8N_ENCRYPTION_KEY: $N8N_KEY
+      N8N_ENCRYPTION_KEY: $${N8N_KEY}
 
       N8N_EXECUTIONS_MODE: regular
       
@@ -215,8 +227,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 420s
+    env_file:
+      - .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
         
   cloudflared:
     image: ${cloudflared_image}
@@ -224,6 +239,8 @@ services:
     command: tunnel --no-autoupdate run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
+    env_file:
+      - .env
     depends_on:
       n8n:
         condition: service_healthy
@@ -360,30 +377,21 @@ fi
 
 echo "Checksum OK"
 
-if [ -f /opt/n8n/.restore_done ]; then
-  echo "✅ Restore already done ранее → SKIP"
-  SKIP_RESTORE=true
-fi
-
+# Выполняем рестор только если логика выше сказала, что надо
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "Dropping DB..."
   docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
   docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
 
   echo "Restoring DB..."
-  cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
-
+  if ! cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n; then
+    echo "❌ Restore failed"
+    exit 1
+  fi
   echo "✅ Restore complete"
-  touch /opt/n8n/.restore_done
 else
   echo "=== Restore skipped ==="
 fi
-
-echo "Restoring DB..."
-cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
-
-echo "✅ Restore complete"
-touch /opt/n8n/.restore_done
 
 rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
 
@@ -522,7 +530,7 @@ if [ ! -s "$FILE" ]; then
   exit 1
 fi
 
-sha256sum "$FILE" > "$CHECKSUM_FILE"
+(cd /tmp && sha256sum "$(basename "$FILE")") > "$CHECKSUM_FILE"
 
 SUCCESS=false
 for i in {1..3}; do
