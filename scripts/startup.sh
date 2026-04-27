@@ -183,6 +183,10 @@ services:
 
       N8N_RUNNERS_ENABLED: "true"
       N8N_RUNNERS_MODE: internal
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_LISTEN_ADDRESS: 0.0.0.0
     logging:
       driver: "json-file"
       options:
