@@ -36,13 +36,13 @@ retry() {
 
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client 
-retry apt-get install -y apt-transport-https 
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
 curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
 gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
 retry apt-get update
-retry apt-get install -y google-cloud-cli
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
 
 
 
@@ -297,7 +297,7 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate --protocol http2 --metrics 127.0.0.1:2000 run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     env_file:
@@ -309,7 +309,7 @@ volumes:
     postgres_data:
 EOF
 
-docker compose config || { echo "❌ Invalid docker-compose.yml"; exit 1; }
+docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 
 echo "=== Cleaning package cache before image pull ==="
 apt-get clean
@@ -466,6 +466,9 @@ START_TIME = time.time()
 BOOTSTRAP_WINDOW = 1800  # 30 minutes
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+        
     def do_GET(self):
         uptime = time.time() - START_TIME
 
@@ -487,7 +490,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             # check postgres
             pg = subprocess.run(
-                ["docker", "exec", "postgres", "pg_isready", "-U", "n8n"],
+                ["docker", "compose", "-f", "/opt/n8n/docker-compose.yml", "exec", "-T", "postgres", "pg_isready", "-U", "n8n"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
@@ -501,7 +504,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"FAIL")
 
-        except:
+        except Exception:
             self.send_response(500)
             self.end_headers()
             self.wfile.write(b"ERROR")
@@ -539,8 +542,9 @@ for i in {1..60}; do
   cf_running=false
 
   # n8n container state 
-  if docker inspect n8n >/dev/null 2>&1 && \
-   docker inspect -f '{{.State.Running}}' n8n | grep -q true; then
+  n8n_container=$(docker compose ps -q n8n 2>/dev/null)
+  if [ -n "$n8n_container" ] && \
+   docker inspect -f '{{.State.Running}}' "$n8n_container" | grep -q true; then
   n8n_running=true
   fi
 
