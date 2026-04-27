@@ -39,17 +39,14 @@ retry apt-get update
 retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client 
 retry apt-get install -y apt-transport-https 
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
-curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpgretry apt-get update
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+retry apt-get update
 retry apt-get install -y google-cloud-cli
 
 
 
-echo "=== Checking Secret Manager access ==="
 
-if ! gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
-  echo "❌ Cannot access Secret Manager"
-  exit 1
-fi
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
@@ -104,18 +101,55 @@ for i in {1..30}; do
   sleep 2
 done
 
+echo "=== Checking GCP metadata (service account) ==="
+
+if ! curl -sf -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email >/dev/null; then
+  echo "❌ No service account attached or metadata unavailable"
+  exit 1
+fi
+
+echo "=== Waiting for GCP auth ==="
+
+for i in {1..10}; do
+  if gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
+    echo "✅ GCP auth ready"
+    break
+  fi
+  echo "⏳ Waiting for GCP auth ($i/10)..."
+  sleep 2
+done
+if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
+  echo "❌ GCP auth not available"
+  exit 1
+fi
+
+echo "=== Checking gcloud CLI ==="
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "❌ gcloud not installed"
+  exit 1
+fi
+
+echo "=== Checking Secret Manager access ==="
+
+if ! retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
+  echo "❌ Cannot access Secret Manager"
+  exit 1
+fi
+
 echo "=== Get Secrets from Secret Manager ==="
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
+DB_PASSWORD=$(retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
   exit 1
 }
 
-N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
+N8N_KEY=$(retry gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch N8N_KEY"
   exit 1
 }
 
-CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
+CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch CF_TOKEN"
   exit 1
 }
@@ -125,7 +159,6 @@ echo "✅ All secrets fetched successfully."
 # Создаем файл .env для гарантированной передачи секретов в Docker
 echo "=== Setup Environment ==="
 mkdir -p /opt/n8n
-export BACKUP_BUCKET_NAME="${BACKUP_BUCKET_NAME}"
 cat <<EOF > /opt/n8n/.env
 CF_TOKEN=$CF_TOKEN
 N8N_KEY=$N8N_KEY
@@ -323,6 +356,8 @@ if [ "$READY" != "true" ]; then
   exit 1
 fi
 
+
+
 echo "=== Restore latest backup ==="
 SKIP_RESTORE=false
 
@@ -351,19 +386,17 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   echo "=== Selecting valid backup ==="
   echo "=== Checking backup bucket access ==="
 
-  if ! gsutil ls "gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql" >/dev/null 2>&1; then
-    echo "❌ Cannot access backup bucket or no backups found"
-    exit 1
+  if ! gsutil ls "gs://${BACKUP_BUCKET_NAME}/n8n/" >/dev/null 2>&1; then
+  echo "❌ Bucket not accessible"
+  exit 1
   fi
   
-  LATEST=$(gsutil ls gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | while read file; do
-    
-    
-    size=$(gsutil du "$file" | awk '{print $1}')
-    if [ "$size" -gt 500000 ]; then
-      echo "$file"
-    fi
-  done | sort | tail -n 1)
+  LATEST=$(gsutil ls -l gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | \
+  grep -v TOTAL | \
+  awk '$1 > 500000 {print $2, $3}' | \
+  sort | \
+  tail -n 1 | \
+  cut -d' ' -f2)
 
   if [ -z "$LATEST" ]; then
     echo "⚠️ No valid backup found → starting with empty DB"
@@ -379,8 +412,12 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     fi
 
     echo "Downloading backup..."
-    gsutil cp "$LATEST" "/tmp/$FILENAME"
-    gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"
+    retry gsutil cp "$LATEST" "/tmp/$FILENAME"
+    if [ ! -s "/tmp/$FILENAME" ]; then
+      echo "❌ Backup file is empty"
+      exit 1
+    fi
+    retry gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"
 
     echo "Verifying checksum..."
     if ! (cd /tmp && sha256sum -c "$FILENAME.sha256"); then
@@ -394,7 +431,10 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
 
     echo "Restoring DB..."
-    if ! cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n; then
+    if ! cat "/tmp/$FILENAME" | docker compose exec -T postgres \
+      psql -U n8n -d n8n \
+      --single-transaction \
+      --set ON_ERROR_STOP=on; then      
       echo "❌ Restore failed"
       exit 1
     fi
@@ -437,12 +477,15 @@ for i in {1..60}; do
   n8n_running=false
   cf_running=false
 
-  if docker compose ps --services --filter "status=running" | grep -q '^n8n$'; then
-  
+  # n8n container state 
+  if docker inspect n8n >/dev/null 2>&1 && \
+   docker inspect -f '{{.State.Running}}' n8n | grep -q true; then
   n8n_running=true
   fi
 
-  if docker compose ps --services --filter "status=running" | grep -q '^cloudflared$'; then
+  # cloudflared container state
+  if docker inspect cloudflared >/dev/null 2>&1 && \
+   docker inspect -f '{{.State.Running}}' cloudflared | grep -q true; then
     cf_running=true
   fi
 
@@ -503,6 +546,14 @@ cat <<'EOF' > /usr/local/bin/backup.sh
 set -e
 cd /opt/n8n || exit 1
 
+retry() {
+  for i in {1..5}; do
+    "$@" && return 0
+    sleep 5
+  done
+  return 1
+}
+
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 FILE="/tmp/n8n-$${TIMESTAMP}.sql"
 CHECKSUM_FILE="$${FILE}.sha256"
@@ -537,7 +588,7 @@ fi
 
 SUCCESS=false
 for i in {1..3}; do
-  if gsutil cp -n "$FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
+  if gsutil cp "$FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     SUCCESS=true
     break
   fi
