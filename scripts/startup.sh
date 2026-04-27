@@ -35,6 +35,10 @@ retry() {
 echo "=== Install Docker ==="
 retry apt-get update
 retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client 
+retry apt-get install -y apt-transport-https 
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+retry apt-get update
 retry apt-get install -y google-cloud-cli
 
 mkdir -p /usr/local/lib/docker/cli-plugins
@@ -515,7 +519,7 @@ fi
 
 SUCCESS=false
 for i in {1..3}; do
-  if gsutil cp -n "$FILE" gs://$${BACKUP_BUCKET_NAME}/n8n/; then
+  if gsutil cp -n "$FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     SUCCESS=true
     break
   fi
@@ -529,7 +533,7 @@ fi
 
 CHECKSUM_OK=false
 for i in {1..3}; do
-  if gsutil cp "$CHECKSUM_FILE" gs://$${BACKUP_BUCKET_NAME}/n8n/; then
+  if gsutil cp "$CHECKSUM_FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     CHECKSUM_OK=true
     break
   fi
@@ -548,7 +552,7 @@ EOF
 
 chmod +x /usr/local/bin/backup.sh
 
-echo "*/10 * * * * root flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
+echo "*/10 * * * * root BACKUP_BUCKET_NAME=${BACKUP_BUCKET_NAME} flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
 systemctl restart cron
 
 echo "=== ALL DONE ==="
