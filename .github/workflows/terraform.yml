@@ -99,6 +99,7 @@ jobs:
           # Skip CKV_GCP_82 (boot disk encryption KMS) — Free Tier project
           # uses Google-managed encryption only; CKV_GCP_38 same reason.
           skip_check: CKV_GCP_82,CKV_GCP_38
+          
 
   trivy-images:
     name: trivy (pinned images)
