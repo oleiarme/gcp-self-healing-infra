@@ -37,8 +37,7 @@ retry apt-get update
 retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client 
 retry apt-get install -y apt-transport-https 
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
-curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
-retry apt-get update
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpgretry apt-get update
 retry apt-get install -y google-cloud-cli
 
 mkdir -p /usr/local/lib/docker/cli-plugins
