@@ -460,16 +460,39 @@ cat <<'EOF' > /opt/health_server.py
 import http.server
 import socketserver
 import subprocess
+import time
+
+START_TIME = time.time()
+BOOTSTRAP_WINDOW = 1200  # 20 minutes
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        uptime = time.time() - START_TIME
+
+        # Phase 1: bootstrap — always healthy
+        if uptime < BOOTSTRAP_WINDOW:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
+
+        # Phase 2: real checks
         try:
-            result = subprocess.run(
+            # check n8n
+            n8n = subprocess.run(
                 ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
-            if result.returncode == 0:
+
+            # check postgres
+            pg = subprocess.run(
+                ["docker", "exec", "postgres", "pg_isready", "-U", "n8n"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            if n8n.returncode == 0 and pg.returncode == 0:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"OK")
@@ -477,6 +500,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(b"FAIL")
+
         except:
             self.send_response(500)
             self.end_headers()
