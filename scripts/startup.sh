@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
+set -o pipefail
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
+
+[ -z "$BACKUP_BUCKET_NAME" ] && { echo "❌ BACKUP_BUCKET_NAME not set"; exit 1; }
 
 # [FIX 1] Вернуть из PR #10: non-interactive apt.
 # Без этого dpkg может EOF'ить на stdin при конфликте conffile и валить
@@ -33,7 +36,17 @@ retry() {
 
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client
+retry apt-get install -y ca-certificates curl gnupg docker.io cron postgresql-client 
+retry apt-get install -y apt-transport-https 
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+retry apt-get update
+retry apt-get install -y google-cloud-cli
+
+
+
+
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
@@ -88,18 +101,55 @@ for i in {1..30}; do
   sleep 2
 done
 
+echo "=== Checking GCP metadata (service account) ==="
+
+if ! curl -sf -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email >/dev/null; then
+  echo "❌ No service account attached or metadata unavailable"
+  exit 1
+fi
+
+echo "=== Waiting for GCP auth ==="
+
+for i in {1..10}; do
+  if gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
+    echo "✅ GCP auth ready"
+    break
+  fi
+  echo "⏳ Waiting for GCP auth ($i/10)..."
+  sleep 2
+done
+if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
+  echo "❌ GCP auth not available"
+  exit 1
+fi
+
+echo "=== Checking gcloud CLI ==="
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "❌ gcloud not installed"
+  exit 1
+fi
+
+echo "=== Checking Secret Manager access ==="
+
+if ! retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
+  echo "❌ Cannot access Secret Manager"
+  exit 1
+fi
+
 echo "=== Get Secrets from Secret Manager ==="
-DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
+DB_PASSWORD=$(retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
   exit 1
 }
 
-N8N_KEY=$(gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
+N8N_KEY=$(retry gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch N8N_KEY"
   exit 1
 }
 
-CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
+CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch CF_TOKEN"
   exit 1
 }
@@ -107,12 +157,15 @@ CF_TOKEN=$(gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NA
 echo "✅ All secrets fetched successfully."
 
 # Создаем файл .env для гарантированной передачи секретов в Docker
+echo "=== Setup Environment ==="
 mkdir -p /opt/n8n
+cat <<EOF > /opt/n8n/.env
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+EOF
 
-
-export CF_TOKEN
-export N8N_KEY
-export DB_PASSWORD
+chmod 600 /opt/n8n/.env
 
 echo "=== Install Ops Agent (logging-only, minimal receiver set) ==="
 # We deliberately ship a logging-only Ops Agent config. Host-metrics and
@@ -152,18 +205,34 @@ EOF
     systemctl enable --now google-cloud-ops-agent
 } || echo "⚠️ WARNING: Ops Agent install failed..."
 
+
+echo "=== Pre-flight Variables Check ==="
+
+[ -z "${n8n_image}" ] && { echo "❌ n8n_image is empty"; exit 1; }
+[ -z "${cloudflared_image}" ] && { echo "❌ cloudflared_image is empty"; exit 1; }
+[ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME is empty"; exit 1; }
+
+echo "✅ All required variables present"
+
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
 
-cat <<EOF > docker-compose.yml
+cat <<'EOF' > docker-compose.yml
 services:
   postgres:
       image: postgres:15-alpine
       restart: unless-stopped
+      env_file:
+        - .env
       environment:
         POSTGRES_DB: n8n
         POSTGRES_USER: n8n
-        POSTGRES_PASSWORD: $DB_PASSWORD
+        POSTGRES_PASSWORD: $${DB_PASSWORD}
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U n8n"]
+        interval: 5s
+        timeout: 3s
+        retries: 5
       volumes:
         - postgres_data:/var/lib/postgresql/data
   n8n:
@@ -178,9 +247,9 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: $DB_PASSWORD
+      DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
 
-      N8N_ENCRYPTION_KEY: $N8N_KEY
+      N8N_ENCRYPTION_KEY: $${N8N_KEY}
 
       N8N_EXECUTIONS_MODE: regular
       
@@ -215,8 +284,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 420s
+    env_file:
+      - .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
         
   cloudflared:
     image: ${cloudflared_image}
@@ -224,6 +296,8 @@ services:
     command: tunnel --no-autoupdate run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
+    env_file:
+      - .env
     depends_on:
       n8n:
         condition: service_healthy
@@ -252,28 +326,26 @@ retry timeout 600 docker pull "${cloudflared_image}"
 
 
 echo "=== Starting Containers ==="
-docker compose up -d || {
-  echo "❌ docker compose up failed"
-  docker compose logs --tail=100
+echo "=== Starting Postgres ONLY (Phase 1) ==="
+# Поднимаем ТОЛЬКО базу, чтобы n8n не успел к ней подключиться
+docker compose up -d postgres || {
+  echo "❌ docker compose up postgres failed"
+  docker compose logs postgres --tail=50
   exit 1
 }
 
 echo "=== Waiting for Postgres (strict) ==="
-
 READY=false
-
 for i in {1..60}; do
   if docker compose ps postgres >/dev/null 2>&1 && \
      docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
     
-    # дополнительная проверка: можно ли выполнить запрос
     if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
       READY=true
       break
     fi
   fi
-
   echo "⏳ Waiting for Postgres ($i/60)..."
   sleep 2
 done
@@ -287,105 +359,97 @@ fi
 
 
 echo "=== Restore latest backup ==="
+SKIP_RESTORE=false
 
 echo "=== Checking if DB already has data ==="
-
 DB_EXISTS=$(docker compose exec -T postgres psql -U n8n -d postgres -tAc \
 "SELECT 1 FROM pg_database WHERE datname='n8n';" | xargs)
 
 if [ "$DB_EXISTS" = "1" ]; then
-  echo "DB exists, checking content..."
-
   TABLE_EXISTS=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
   "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
 
   if [ "$TABLE_EXISTS" = "t" ]; then
     WORKFLOW_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
     "SELECT COUNT(*) FROM workflow_entity;" | xargs)
-
     echo "Existing workflows: $WORKFLOW_COUNT"
 
     if [ "$WORKFLOW_COUNT" -gt 0 ]; then
       echo "✅ DB already populated → SKIP restore"
       SKIP_RESTORE=true
-    else
-      echo "⚠️ Table exists but empty → will restore"
-      SKIP_RESTORE=false
     fi
-  else
-    echo "⚠️ No workflow table → will restore"
-    SKIP_RESTORE=false
   fi
-else
-  echo "⚠️ DB does not exist → will restore"
-  SKIP_RESTORE=false
 fi
 
-echo "=== Selecting valid backup ==="
-
-LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/n8n-*.sql 2>/dev/null | while read file; do
-  size=$(gsutil du "$file" | awk '{print $1}')
-  if [ "$size" -gt 500000 ]; then
-    echo "$file"
-  fi
-done | sort | tail -n 1)
-
-echo "Selected backup: $LATEST"
-
-if [ -z "$LATEST" ]; then
-  echo "⚠️ No valid backup found → starting with empty DB"
-  exit 0
-fi
-
-CHECKSUM="$LATEST.sha256"
-FILENAME=$(basename "$LATEST")
-
-echo "Found backup: $LATEST"
-
-if ! gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
-  echo "❌ Checksum missing"
-  exit 1
-fi
-
-echo "Downloading backup..."
-gsutil cp "$LATEST" "/tmp/$FILENAME"
-gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"
-
-echo "Verifying checksum..."
-if ! (cd /tmp && sha256sum -c "$FILENAME.sha256"); then
-  echo "❌ Checksum failed"
-  exit 1
-fi
-
-echo "Checksum OK"
-
-echo "Dropping DB..."
+# Выполняем поиск бэкапа только если решили ресторить
 if [ "$SKIP_RESTORE" != "true" ]; then
-docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
-docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
-else
-  echo "=== Restore skipped ==="
+  echo "=== Selecting valid backup ==="
+  echo "=== Checking backup bucket access ==="
+
+  if ! gsutil ls "gs://${BACKUP_BUCKET_NAME}/n8n/" >/dev/null 2>&1; then
+  echo "❌ Bucket not accessible"
+  exit 1
+  fi
+  
+  LATEST=$(gsutil ls -l gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | \
+  grep -v TOTAL | \
+  awk '$1 > 500000 {print $2, $3}' | \
+  sort | \
+  tail -n 1 | \
+  cut -d' ' -f2)
+
+  if [ -z "$LATEST" ]; then
+    echo "⚠️ No valid backup found → starting with empty DB"
+    SKIP_RESTORE=true
+  else
+    echo "Selected backup: $LATEST"
+    CHECKSUM="$LATEST.sha256"
+    FILENAME=$(basename "$LATEST")
+
+    if ! gsutil stat "$CHECKSUM" >/dev/null 2>&1; then
+      echo "❌ Checksum missing"
+      exit 1
+    fi
+
+    echo "Downloading backup..."
+    retry gsutil cp "$LATEST" "/tmp/$FILENAME"
+    if [ ! -s "/tmp/$FILENAME" ]; then
+      echo "❌ Backup file is empty"
+      exit 1
+    fi
+    retry gsutil cp "$CHECKSUM" "/tmp/$FILENAME.sha256"
+
+    echo "Verifying checksum..."
+    if ! (cd /tmp && sha256sum -c "$FILENAME.sha256"); then
+      echo "❌ Checksum failed"
+      exit 1
+    fi
+    echo "Checksum OK"
+
+    echo "Dropping DB..."
+    docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
+    docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+
+    echo "Restoring DB..."
+    if ! cat "/tmp/$FILENAME" | docker compose exec -T postgres \
+      psql -U n8n -d n8n \
+      --single-transaction \
+      --set ON_ERROR_STOP=on; then      
+      echo "❌ Restore failed"
+      exit 1
+    fi
+    echo "✅ Restore complete"
+    rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
+  fi
 fi
 
-echo "Restoring DB..."
-cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
-
-echo "✅ Restore complete"
-
-rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
-
-echo "=== Verifying restore ==="
-
-COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
-
-echo "Workflow count: $COUNT"
-
-if [ "$COUNT" -lt 1 ]; then
-  echo "⚠️ Restore empty → skipping but continuing"
-else
-  echo "✅ Restore OK"
-fi
-
+echo "=== Starting Application Containers (Phase 2) ==="
+# ТЕПЕРЬ безопасно поднимаем n8n и cloudflared
+docker compose up -d n8n cloudflared || {
+  echo "❌ docker compose up apps failed"
+  docker compose logs --tail=100
+  exit 1
+}
 
 echo "=== Waiting for n8n readiness ==="
 
@@ -413,12 +477,15 @@ for i in {1..60}; do
   n8n_running=false
   cf_running=false
 
-  if docker compose ps --services --filter "status=running" | grep -q '^n8n$'; then
-  
+  # n8n container state 
+  if docker inspect n8n >/dev/null 2>&1 && \
+   docker inspect -f '{{.State.Running}}' n8n | grep -q true; then
   n8n_running=true
   fi
 
-  if docker compose ps --services --filter "status=running" | grep -q '^cloudflared$'; then
+  # cloudflared container state
+  if docker inspect cloudflared >/dev/null 2>&1 && \
+   docker inspect -f '{{.State.Running}}' cloudflared | grep -q true; then
     cf_running=true
   fi
 
@@ -479,6 +546,14 @@ cat <<'EOF' > /usr/local/bin/backup.sh
 set -e
 cd /opt/n8n || exit 1
 
+retry() {
+  for i in {1..5}; do
+    "$@" && return 0
+    sleep 5
+  done
+  return 1
+}
+
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 FILE="/tmp/n8n-$${TIMESTAMP}.sql"
 CHECKSUM_FILE="$${FILE}.sha256"
@@ -509,11 +584,11 @@ if [ ! -s "$FILE" ]; then
   exit 1
 fi
 
-sha256sum "$FILE" > "$CHECKSUM_FILE"
+(cd /tmp && sha256sum "$(basename "$FILE")") > "$CHECKSUM_FILE"
 
 SUCCESS=false
 for i in {1..3}; do
-  if gsutil cp -n "$FILE" gs://n8n-backups-idealist426118/n8n/; then
+  if gsutil cp "$FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     SUCCESS=true
     break
   fi
@@ -527,7 +602,7 @@ fi
 
 CHECKSUM_OK=false
 for i in {1..3}; do
-  if gsutil cp "$CHECKSUM_FILE" gs://n8n-backups-idealist426118/n8n/; then
+  if gsutil cp "$CHECKSUM_FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     CHECKSUM_OK=true
     break
   fi
@@ -546,7 +621,7 @@ EOF
 
 chmod +x /usr/local/bin/backup.sh
 
-echo "*/10 * * * * root flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
+echo "*/10 * * * * root BACKUP_BUCKET_NAME=${BACKUP_BUCKET_NAME} flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
 systemctl restart cron
 
 echo "=== ALL DONE ==="

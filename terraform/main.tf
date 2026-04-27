@@ -311,6 +311,7 @@ resource "google_compute_instance_template" "tpl" {
       db_port               = "5432"
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
+      BACKUP_BUCKET_NAME    = var.backup_bucket_name
     })
   }
 
