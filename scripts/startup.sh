@@ -77,6 +77,17 @@ retry systemctl restart docker
 systemctl enable docker
 systemctl enable containerd
 
+echo "=== Waiting for Docker daemon ==="
+
+for i in {1..30}; do
+  if docker info >/dev/null 2>&1; then
+    echo "✅ Docker is ready"
+    break
+  fi
+  echo "⏳ Waiting for Docker ($i/30)..."
+  sleep 2
+done
+
 echo "=== Get Secrets from Secret Manager ==="
 DB_PASSWORD=$(gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
@@ -156,6 +167,7 @@ services:
       volumes:
         - postgres_data:/var/lib/postgresql/data
   n8n:
+    container_name: n8n
     image: ${n8n_image}
     restart: unless-stopped
     ports:
@@ -182,6 +194,10 @@ services:
 
       N8N_RUNNERS_ENABLED: "true"
       N8N_RUNNERS_MODE: internal
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_LISTEN_ADDRESS: 0.0.0.0
     logging:
       driver: "json-file"
       options:
@@ -205,11 +221,12 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --metrics 0.0.0.0:2000 run
+    command: tunnel --no-autoupdate run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
-    environment:
-      TUNNEL_TOKEN: \$CF_TOKEN
+    depends_on:
+      n8n:
+        condition: service_healthy
 volumes:
     postgres_data:
 EOF
@@ -241,24 +258,28 @@ docker compose up -d || {
   exit 1
 }
 
-echo "=== Waiting for Postgres ==="
+echo "=== Waiting for Postgres (strict) ==="
 
 READY=false
 
-for i in {1..30}; do
+for i in {1..60}; do
   if docker compose ps postgres >/dev/null 2>&1 && \
      docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
-    echo "✅ Postgres is ready"
-    READY=true
-    break
+    
+    # дополнительная проверка: можно ли выполнить запрос
+    if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      echo "✅ Postgres fully ready"
+      READY=true
+      break
+    fi
   fi
 
-  echo "⏳ Waiting for Postgres ($i/30)..."
+  echo "⏳ Waiting for Postgres ($i/60)..."
   sleep 2
 done
 
 if [ "$READY" != "true" ]; then
-  echo "❌ Postgres did not become ready in time"
+  echo "❌ Postgres not ready"
   docker compose logs postgres --tail=50
   exit 1
 fi
@@ -267,13 +288,53 @@ fi
 
 echo "=== Restore latest backup ==="
 
-LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/n8n-*.sql 2>/dev/null | sort | tail -n 1)
+echo "=== Checking if DB already has data ==="
 
-echo "LATEST backup: $LATEST"
+DB_EXISTS=$(docker compose exec -T postgres psql -U n8n -d postgres -tAc \
+"SELECT 1 FROM pg_database WHERE datname='n8n';" | xargs)
+
+if [ "$DB_EXISTS" = "1" ]; then
+  echo "DB exists, checking content..."
+
+  TABLE_EXISTS=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+  "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
+
+  if [ "$TABLE_EXISTS" = "t" ]; then
+    WORKFLOW_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+    "SELECT COUNT(*) FROM workflow_entity;" | xargs)
+
+    echo "Existing workflows: $WORKFLOW_COUNT"
+
+    if [ "$WORKFLOW_COUNT" -gt 0 ]; then
+      echo "✅ DB already populated → SKIP restore"
+      SKIP_RESTORE=true
+    else
+      echo "⚠️ Table exists but empty → will restore"
+      SKIP_RESTORE=false
+    fi
+  else
+    echo "⚠️ No workflow table → will restore"
+    SKIP_RESTORE=false
+  fi
+else
+  echo "⚠️ DB does not exist → will restore"
+  SKIP_RESTORE=false
+fi
+
+echo "=== Selecting valid backup ==="
+
+LATEST=$(gsutil ls gs://n8n-backups-idealist426118/n8n/n8n-*.sql 2>/dev/null | while read file; do
+  size=$(gsutil du "$file" | awk '{print $1}')
+  if [ "$size" -gt 500000 ]; then
+    echo "$file"
+  fi
+done | sort | tail -n 1)
+
+echo "Selected backup: $LATEST"
 
 if [ -z "$LATEST" ]; then
-  echo "❌ CRITICAL: No backup found in GCS"
-  exit 1
+  echo "⚠️ No valid backup found → starting with empty DB"
+  exit 0
 fi
 
 CHECKSUM="$LATEST.sha256"
@@ -299,8 +360,12 @@ fi
 echo "Checksum OK"
 
 echo "Dropping DB..."
+if [ "$SKIP_RESTORE" != "true" ]; then
 docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
 docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+else
+  echo "=== Restore skipped ==="
+fi
 
 echo "Restoring DB..."
 cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
@@ -309,7 +374,33 @@ echo "✅ Restore complete"
 
 rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
 
+echo "=== Verifying restore ==="
+
+COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
+
+echo "Workflow count: $COUNT"
+
+if [ "$COUNT" -lt 1 ]; then
+  echo "⚠️ Restore empty → skipping but continuing"
+else
+  echo "✅ Restore OK"
+fi
+
+
+echo "=== Waiting for n8n readiness ==="
+
+for i in {1..60}; do
+  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+    echo "✅ n8n is ready"
+    break
+  fi
+
+  echo "⏳ Waiting for n8n ($i/60)..."
+  sleep 5
+done
+
 echo "=== Verifying n8n startup ==="
+
 
 HEALTHY=false
 last_fail="both n8n and cloudflared"
@@ -393,8 +484,26 @@ FILE="/tmp/n8n-$${TIMESTAMP}.sql"
 CHECKSUM_FILE="$${FILE}.sha256"
 
 POSTGRES_CONTAINER=$(docker ps -qf name=postgres)
+if [ -z "$POSTGRES_CONTAINER" ]; then
+  echo "❌ Postgres container not found"
+  exit 1
+fi
 
-timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl n8n > "$FILE"
+echo "=== Checking DB before backup ==="
+
+COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
+echo "Workflow count: $COUNT"
+
+SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -t -c "SELECT pg_database_size('n8n');" | xargs)
+
+echo "DB size: $SIZE"
+
+if [ "$COUNT" -lt 1 ] || [ "$SIZE" -lt 1000000 ]; then
+  echo "⚠️ SKIP backup: invalid DB (count=$COUNT size=$SIZE)"
+  exit 0
+fi
+
+timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl --clean --if-exists n8n > "$FILE"
 if [ ! -s "$FILE" ]; then
   echo "❌ EMPTY BACKUP"
   exit 1
