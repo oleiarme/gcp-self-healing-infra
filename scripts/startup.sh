@@ -244,7 +244,7 @@ services:
     image: ${n8n_image}
     restart: unless-stopped
     ports:
-        - "5678:5678"
+        - "127.0.0.1:5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -297,7 +297,7 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:2000 run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     env_file:
