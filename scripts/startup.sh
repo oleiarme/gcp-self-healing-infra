@@ -226,21 +226,19 @@ services:
   postgres:
       image: postgres:15-alpine
       restart: unless-stopped
-      env_file:
-        - .env
       environment:
         POSTGRES_DB: n8n
         POSTGRES_USER: n8n
-        POSTGRES_PASSWORD: $${DB_PASSWORD}
+        POSTGRES_PASSWORD=$(gcloud secrets versions access latest \
+  --secret="${DB_SECRET_NAME}")
       healthcheck:
-        test: ["CMD-SHELL", "pg_isready -U n8n"]
+        test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
         interval: 5s
         timeout: 3s
         retries: 5
       volumes:
         - postgres_data:/var/lib/postgresql/data
   n8n:
-    container_name: n8n
     image: ${n8n_image}
     restart: unless-stopped
     ports:
@@ -275,6 +273,7 @@ services:
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PORT: 5678
       N8N_LISTEN_ADDRESS: 0.0.0.0
+      DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
     logging:
       driver: "json-file"
       options:
@@ -292,8 +291,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 420s
-    env_file:
-      - .env
     depends_on:
       postgres:
         condition: service_healthy
@@ -301,7 +298,7 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate --metrics 127.0.0.1:2000 run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --protocol http2 --metrics 127.0.0.1:2000 run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     env_file:
