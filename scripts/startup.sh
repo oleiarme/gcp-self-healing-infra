@@ -287,6 +287,7 @@ fi
 
 
 echo "=== Restore latest backup ==="
+SKIP_RESTORE=false
 
 echo "=== Checking if DB already has data ==="
 
@@ -359,10 +360,21 @@ fi
 
 echo "Checksum OK"
 
-echo "Dropping DB..."
+if [ -f /opt/n8n/.restore_done ]; then
+  echo "✅ Restore already done ранее → SKIP"
+  SKIP_RESTORE=true
+fi
+
 if [ "$SKIP_RESTORE" != "true" ]; then
-docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
-docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+  echo "Dropping DB..."
+  docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
+  docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+
+  echo "Restoring DB..."
+  cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
+
+  echo "✅ Restore complete"
+  touch /opt/n8n/.restore_done
 else
   echo "=== Restore skipped ==="
 fi
@@ -371,6 +383,7 @@ echo "Restoring DB..."
 cat "/tmp/$FILENAME" | docker compose exec -T postgres psql -U n8n -d n8n
 
 echo "✅ Restore complete"
+touch /opt/n8n/.restore_done
 
 rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
 
