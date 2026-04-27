@@ -454,6 +454,40 @@ docker compose up -d n8n cloudflared || {
   exit 1
 }
 
+echo "=== Starting Health Check Server (port 8080) ==="
+
+cat <<'EOF' > /opt/health_server.py
+import http.server
+import socketserver
+import subprocess
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            result = subprocess.run(
+                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            if result.returncode == 0:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"FAIL")
+        except:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"ERROR")
+
+with socketserver.TCPServer(("", 8080), Handler) as httpd:
+    httpd.serve_forever()
+EOF
+
+nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
+
 echo "=== Waiting for n8n readiness ==="
 
 for i in {1..60}; do
@@ -530,7 +564,7 @@ done
 if [ "$HEALTHY" = true ]; then
   echo "=== Startup complete ==="
   docker compose ps
-
+  
 else
   echo "❌ CRITICAL: startup failed — $last_fail did not become healthy within 10 minutes"
 
