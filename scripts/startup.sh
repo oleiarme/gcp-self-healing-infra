@@ -463,7 +463,7 @@ import subprocess
 import time
 
 START_TIME = time.time()
-BOOTSTRAP_WINDOW = 1200  # 20 minutes
+BOOTSTRAP_WINDOW = 1800  # 30 minutes
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
