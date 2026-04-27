@@ -248,7 +248,12 @@ variable "wif_provider_id" {
   default     = ""
 }
 
+
 variable "backup_bucket_name" {
-  description = "GCS bucket for n8n backups"
-  type        = string
+  type = string
+
+  validation {
+    condition     = length(var.backup_bucket_name) > 0
+    error_message = "backup_bucket_name must not be empty"
+  }
 }

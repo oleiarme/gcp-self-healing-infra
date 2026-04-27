@@ -260,6 +260,7 @@ resource "google_compute_instance_template" "tpl" {
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
 
+
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
     disk_size_gb = 30

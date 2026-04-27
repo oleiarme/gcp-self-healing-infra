@@ -3,7 +3,7 @@ set -e
 set -o pipefail
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
-[ -z "$BACKUP_BUCKET_NAME" ] && { echo "❌ BACKUP_BUCKET_NAME not set"; exit 1; }
+[ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME not set"; exit 1; }
 
 # [FIX 1] Вернуть из PR #10: non-interactive apt.
 # Без этого dpkg может EOF'ить на stdin при конфликте conffile и валить
@@ -100,6 +100,10 @@ for i in {1..30}; do
   echo "⏳ Waiting for Docker ($i/30)..."
   sleep 2
 done
+docker info >/dev/null 2>&1 || {
+  echo "❌ Docker not ready after 60s"
+  exit 1
+}
 
 echo "=== Checking GCP metadata (service account) ==="
 
@@ -240,7 +244,7 @@ services:
     image: ${n8n_image}
     restart: unless-stopped
     ports:
-        - "127.0.0.1:5678:5678"
+        - "5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -293,7 +297,7 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     env_file:
@@ -390,13 +394,12 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   echo "❌ Bucket not accessible"
   exit 1
   fi
-  
   LATEST=$(gsutil ls -l gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | \
   grep -v TOTAL | \
   awk '$1 > 500000 {print $2, $3}' | \
   sort | \
   tail -n 1 | \
-  cut -d' ' -f2)
+  cut -d' ' -f2) || true  
 
   if [ -z "$LATEST" ]; then
     echo "⚠️ No valid backup found → starting with empty DB"
@@ -484,8 +487,9 @@ for i in {1..60}; do
   fi
 
   # cloudflared container state
-  if docker inspect cloudflared >/dev/null 2>&1 && \
-   docker inspect -f '{{.State.Running}}' cloudflared | grep -q true; then
+  cf_container=$(docker compose ps -q cloudflared 2>/dev/null)
+  if [ -n "$cf_container" ] && \
+    docker inspect -f '{{.State.Running}}' "$cf_container" | grep -q true; then
     cf_running=true
   fi
 
