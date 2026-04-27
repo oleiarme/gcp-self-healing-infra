@@ -3,6 +3,8 @@ set -e
 set -o pipefail
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
+[ -z "$BACKUP_BUCKET_NAME" ] && { echo "❌ BACKUP_BUCKET_NAME not set"; exit 1; }
+
 # [FIX 1] Вернуть из PR #10: non-interactive apt.
 # Без этого dpkg может EOF'ить на stdin при конфликте conffile и валить
 # весь bootstrap. Имена стабильные, чтобы terraform templatefile()
@@ -39,6 +41,15 @@ retry apt-get install -y apt-transport-https
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
 curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpgretry apt-get update
 retry apt-get install -y google-cloud-cli
+
+
+
+echo "=== Checking Secret Manager access ==="
+
+if ! gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
+  echo "❌ Cannot access Secret Manager"
+  exit 1
+fi
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
