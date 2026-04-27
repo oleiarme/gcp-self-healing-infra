@@ -224,6 +224,77 @@ resource "google_secret_manager_secret_iam_member" "cf_token_access" {
 }
 
 # ==========================================
+# 1.5 BACKUP STORAGE
+# ==========================================
+# GCS bucket for n8n Postgres backups. The lifecycle rule auto-deletes
+# objects older than 7 days, keeping storage under the 5 GB Free-Tier
+# cap (~1 GB at 144 backups/day × 7 days × ~1 MB each).
+# IMPORTANT: existing bucket must be imported before first apply:
+#   terraform import google_storage_bucket.backup <bucket-name>
+
+resource "google_storage_bucket" "backup" {
+  name                        = var.backup_bucket_name
+  location                    = "US-CENTRAL1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  versioning {
+    enabled = true
+  }
+
+  logging {
+    log_bucket        = google_storage_bucket.logs.name
+    log_object_prefix = "backup-access"
+  }
+
+  lifecycle_rule {
+    condition {
+      age = 7
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_storage_bucket_iam_member" "backup_writer" {
+  bucket = google_storage_bucket.backup.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.vm_sa.email}"
+}
+
+resource "google_storage_bucket" "logs" {
+  name                        = "${var.backup_bucket_name}-logs"
+  location                    = "US-CENTRAL1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  versioning {
+    enabled = true
+  }
+
+  logging {
+    log_bucket        = google_storage_bucket.logs_audit.name
+    log_object_prefix = "logs-access"
+  }
+
+}
+
+//checkov:skip=CKV_GCP_62: Terminal audit bucket
+resource "google_storage_bucket" "logs_audit" {
+  name                        = "${var.backup_bucket_name}-logs-audit"
+  location                    = "US-CENTRAL1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning {
+    enabled = true
+  }
+}
+
+# ==========================================
 # 2. COMPUTE RESOURCES
 # ==========================================
 
