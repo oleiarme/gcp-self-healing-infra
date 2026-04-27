@@ -231,7 +231,7 @@ resource "google_compute_health_check" "hc" {
   name = "n8n-health-check"
 
   http_health_check {
-    port         = 5678
+    port         = 8080
     request_path = "/"
   }
 
@@ -259,6 +259,7 @@ resource "google_compute_instance_template" "tpl" {
   ]
   name_prefix  = "n8n-"
   machine_type = "e2-micro"
+  tags         = ["n8n"]
 
 
   disk {
@@ -360,21 +361,21 @@ resource "google_compute_region_instance_group_manager" "mig" {
     instance_template = google_compute_instance_template.tpl.id
   }
 
-  ##auto_healing_policies {
-  ##health_check = google_compute_health_check.hc.id
-  # 600s > Docker start_period (420s) + 3 min safety margin.
-  # startup.sh on e2-micro must do: apt update + install docker + pull two
-  # container images (n8n is ~500MB uncompressed) + start containers + run
-  # n8n DB migrations. Cold path takes 6–10 min; giving MIG 10 min before
-  # it starts probing avoids spurious recreation during legitimate boot.
-  #
-  # After initial_delay expires, GCP probes /healthz every 10s. With
-  # unhealthy_threshold=5 and check_interval=10s, detection takes ~50s, so
-  # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
-  # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
-  # (no initial_delay on the replacement path, only detection + startup).
-  ##initial_delay_sec = 1800
-  ##}
+  auto_healing_policies {
+    health_check = google_compute_health_check.hc.id
+    # 600s > Docker start_period (420s) + 3 min safety margin.
+    # startup.sh on e2-micro must do: apt update + install docker + pull two
+    # container images (n8n is ~500MB uncompressed) + start containers + run
+    # n8n DB migrations. Cold path takes 6–10 min; giving MIG 10 min before
+    # it starts probing avoids spurious recreation during legitimate boot.
+    #
+    # After initial_delay expires, GCP probes /healthz every 10s. With
+    # unhealthy_threshold=5 and check_interval=10s, detection takes ~50s, so
+    # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
+    # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
+    # (no initial_delay on the replacement path, only detection + startup).
+    initial_delay_sec = 900
+  }
 
   update_policy {
     type                         = "PROACTIVE"
@@ -454,3 +455,19 @@ resource "google_billing_budget" "monthly_cap" {
 }
 
 
+resource "google_compute_firewall" "allow_health_check" {
+  name    = "allow-health-check"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+
+  source_ranges = [
+    "130.211.0.0/22",
+    "35.191.0.0/16"
+  ]
+
+  target_tags = ["n8n"]
+}

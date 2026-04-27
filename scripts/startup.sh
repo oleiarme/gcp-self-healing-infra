@@ -244,7 +244,7 @@ services:
     image: ${n8n_image}
     restart: unless-stopped
     ports:
-        - "5678:5678"
+        - "127.0.0.1:5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -297,7 +297,7 @@ services:
   cloudflared:
     image: ${cloudflared_image}
     restart: unless-stopped
-    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:2000 run --token $${CF_TOKEN}
     ports:
       - "127.0.0.1:2000:2000"
     env_file:
@@ -454,6 +454,64 @@ docker compose up -d n8n cloudflared || {
   exit 1
 }
 
+echo "=== Starting Health Check Server (port 8080) ==="
+
+cat <<'EOF' > /opt/health_server.py
+import http.server
+import socketserver
+import subprocess
+import time
+
+START_TIME = time.time()
+BOOTSTRAP_WINDOW = 1200  # 20 minutes
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        uptime = time.time() - START_TIME
+
+        # Phase 1: bootstrap — always healthy
+        if uptime < BOOTSTRAP_WINDOW:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
+
+        # Phase 2: real checks
+        try:
+            # check n8n
+            n8n = subprocess.run(
+                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            # check postgres
+            pg = subprocess.run(
+                ["docker", "exec", "postgres", "pg_isready", "-U", "n8n"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            if n8n.returncode == 0 and pg.returncode == 0:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"FAIL")
+
+        except:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"ERROR")
+
+with socketserver.TCPServer(("", 8080), Handler) as httpd:
+    httpd.serve_forever()
+EOF
+
+nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
+
 echo "=== Waiting for n8n readiness ==="
 
 for i in {1..60}; do
@@ -530,7 +588,7 @@ done
 if [ "$HEALTHY" = true ]; then
   echo "=== Startup complete ==="
   docker compose ps
-
+  
 else
   echo "❌ CRITICAL: startup failed — $last_fail did not become healthy within 10 minutes"
 
