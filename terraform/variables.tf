@@ -247,3 +247,8 @@ variable "wif_provider_id" {
   type        = string
   default     = ""
 }
+
+variable "backup_bucket_name" {
+  description = "GCS bucket for n8n backups"
+  type        = string
+}
