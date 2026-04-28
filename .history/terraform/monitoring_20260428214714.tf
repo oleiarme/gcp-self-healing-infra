@@ -379,7 +379,6 @@ resource "google_monitoring_alert_policy" "mig_autohealing" {
 resource "google_monitoring_alert_policy" "uptime_fail_fast" {
   display_name = "n8n uptime FAIL (fast detection)"
   severity     = "CRITICAL"
-  combiner     = "OR"
 
   conditions {
     display_name = "uptime check failed"
@@ -389,7 +388,7 @@ resource "google_monitoring_alert_policy" "uptime_fail_fast" {
       comparison      = "COMPARISON_LT"
       threshold_value = 1
 
-      duration = "60s" # 🔥 ключ
+      duration = "60s"   # 🔥 ключ
 
       aggregations {
         alignment_period   = "60s"

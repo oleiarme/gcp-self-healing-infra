@@ -389,7 +389,7 @@ resource "google_monitoring_alert_policy" "uptime_fail_fast" {
       comparison      = "COMPARISON_LT"
       threshold_value = 1
 
-      duration = "60s" # 🔥 ключ
+      duration = "60s"   # 🔥 ключ
 
       aggregations {
         alignment_period   = "60s"
