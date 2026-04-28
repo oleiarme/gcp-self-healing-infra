@@ -3,7 +3,7 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 2,
+            "activePatchIndex": 4,
             "patches": [
                 {
                     "date": 1777409234532,
@@ -16,6 +16,14 @@
                 {
                     "date": 1777411057372,
                     "content": "Index: \n===================================================================\n--- \n+++ \n@@ -388,9 +388,9 @@\n \r\n       comparison      = \"COMPARISON_LT\"\r\n       threshold_value = 1\r\n \r\n-      duration = \"60s\"   # 🔥 ключ\r\n+      duration = \"60s\" # 🔥 ключ\r\n \r\n       aggregations {\r\n         alignment_period   = \"60s\"\r\n         per_series_aligner = \"ALIGN_FRACTION_TRUE\"\r\n@@ -440,9 +440,9 @@\n \r\n   notification_channels = local.all_notification_channels\r\n \r\n   alert_strategy {\r\n-    auto_close = \"600s\"\r\n+    auto_close = \"1800s\"\r\n   }\r\n \r\n   documentation {\r\n     content   = \"Fast detection: uptime success dropped below 100% over 2 minutes. Likely early degradation before SLO burn. ${local.runbook_url_md} §1.\"\r\n@@ -472,9 +472,9 @@\n         | filter\r\n             (resource.host == '${var.n8n_public_host}')\r\n             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'\r\n         | group_by sliding(5m), [p95: percentile(val(), 95)]\r\n-        | condition p95 > 2\r\n+        | condition p95 > 2000 #miliseconf =2s\r\n       MQL\r\n \r\n       trigger {\r\n         count = 1\r\n"
+                },
+                {
+                    "date": 1777411618394,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -472,9 +472,9 @@\n         | filter\r\n             (resource.host == '${var.n8n_public_host}')\r\n             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'\r\n         | group_by sliding(5m), [p95: percentile(val(), 95)]\r\n-        | condition p95 > 2000 #miliseconf =2s\r\n+        | condition p95 > 2000\r\n       MQL\r\n \r\n       trigger {\r\n         count = 1\r\n@@ -484,9 +484,9 @@\n \r\n   notification_channels = local.all_notification_channels\r\n \r\n   alert_strategy {\r\n-    auto_close = \"900s\"\r\n+    auto_close = \"1800s\"\r\n   }\r\n \r\n   documentation {\r\n     content   = \"Latency degradation detected (p95 > 2s). This often precedes errors. Investigate before SLO burn. ${local.runbook_url_md} §1.\"\r\n"
+                },
+                {
+                    "date": 1777411903075,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -472,9 +472,9 @@\n         | filter\r\n             (resource.host == '${var.n8n_public_host}')\r\n             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'\r\n         | group_by sliding(5m), [p95: percentile(val(), 95)]\r\n-        | condition p95 > 2000\r\n+        | condition p95 > cast_units(2000, \"ms\")\r\n       MQL\r\n \r\n       trigger {\r\n         count = 1\r\n"
                 }
             ],
             "date": 1777409234532,
