@@ -310,3 +310,69 @@ resource "google_monitoring_alert_policy" "log_ingestion_absent" {
     mime_type = "text/markdown"
   }
 }
+
+# ------------------------------------------------------------
+# MIG auto-healing alert (Phase 5 follow-up)
+# ------------------------------------------------------------
+# When MIG replaces a VM (health check failure → auto-heal), no existing
+# alert fires immediately: SLO burn-rate alerts require sustained failure
+# over 1h/6h sliding windows, and startup_critical only fires when the
+# startup script itself fails — not when GCP decides to replace the VM.
+# This alert watches Compute Engine Admin Activity audit logs for
+# instance-insert events matching the n8n MIG naming pattern, providing
+# near-real-time notification of any VM replacement (auto-heal, rolling
+# update, or manual recreation).
+
+resource "google_logging_metric" "mig_instance_replaced" {
+  name    = "n8n/mig_instance_replaced"
+  project = var.project_id
+  filter = join(" AND ", [
+    "resource.type=\"gce_instance\"",
+    "protoPayload.methodName=\"v1.compute.instances.insert\"",
+    "protoPayload.resourceName:\"instances/n8n-\"",
+  ])
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    unit         = "1"
+    display_name = "n8n VM instance creation (MIG replacement)"
+  }
+}
+
+resource "google_monitoring_alert_policy" "mig_autohealing" {
+  display_name = "n8n VM replaced by MIG (auto-healing or update)"
+  severity     = "WARNING"
+  combiner     = "OR"
+  user_labels = {
+    runbook = "gcp-self-healing-infra-runbook-md"
+    scope   = "autohealing"
+  }
+
+  conditions {
+    display_name = "n8n instance insert > 0 in 5 min"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.mig_instance_replaced.name}\" resource.type=\"gce_instance\""
+      threshold_value = 0
+      comparison      = "COMPARISON_GT"
+      duration        = "0s"
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.all_notification_channels
+  alert_strategy {
+    auto_close = "3600s"
+  }
+  documentation {
+    content   = "MIG created a new n8n VM — likely an auto-healing event (health check failed) or a rolling update. Check VM serial console and /var/log/startup.log for progress. ${local.runbook_url_md} §1 / §2."
+    mime_type = "text/markdown"
+  }
+}
+
