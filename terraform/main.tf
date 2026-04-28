@@ -340,7 +340,7 @@ resource "google_compute_instance_template" "tpl" {
     google_secret_manager_secret.n8n_key,
     google_secret_manager_secret.cf_token
   ]
-  name_prefix  = "n8n-"
+  name = "n8n-${substr(md5(timestamp()), 0, 6)}"
   machine_type = "e2-micro"
   tags         = ["n8n"]
 
@@ -397,7 +397,9 @@ resource "google_compute_instance_template" "tpl" {
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
       BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      
     })
+    force_update   = timestamp()
   }
 
   lifecycle {
