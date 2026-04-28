@@ -18,6 +18,10 @@ provider "google" {
   zone    = var.zone
 }
 
+
+resource "random_id" "bucket_suffix" {
+  byte_length = 2
+}
 resource "google_project_service" "required" {
   for_each = toset([
     "cloudresourcemanager.googleapis.com",
