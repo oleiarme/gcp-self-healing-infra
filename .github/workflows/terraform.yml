@@ -10,7 +10,7 @@ on:
       - 'terraform/**'
       - 'scripts/**'
       - 'docs/drills/**'
-      - '.github/workflows/terraform.yml'
+      - '.github/workflows/**'
 
 jobs:
   terraform:
