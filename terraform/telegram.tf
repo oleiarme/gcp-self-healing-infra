@@ -47,8 +47,9 @@ resource "google_project_service" "pubsub" {
 
 # --- Pub/Sub topic for Cloud Monitoring alerts ---
 
-# checkov:skip=CKV_GCP_83: Alert payloads contain no sensitive data; CSEK adds key-management overhead with no security benefit
+
 resource "google_pubsub_topic" "alerts" {
+  # checkov:skip=CKV_GCP_83: Alert payloads contain no sensitive data; CSEK adds key-management overhead with no security benefit
   count   = local.telegram_enabled ? 1 : 0
   name    = "n8n-monitoring-alerts"
   project = var.project_id
@@ -127,6 +128,7 @@ resource "google_cloudfunctions_function" "telegram_alert" {
   description = "Forward Cloud Monitoring alerts to Telegram"
   runtime     = "python312"
   region      = var.region
+  ingress_settings = "ALLOW_INTERNAL_ONLY"
 
   available_memory_mb   = 128
   timeout               = 30
