@@ -3,11 +3,15 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 0,
+            "activePatchIndex": 1,
             "patches": [
                 {
                     "date": 1777409234532,
                     "content": "Index: \n===================================================================\n--- \n+++ \n"
+                },
+                {
+                    "date": 1777410159860,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -378,8 +378,9 @@\n \r\n resource \"google_monitoring_alert_policy\" \"uptime_fail_fast\" {\r\n   display_name = \"n8n uptime FAIL (fast detection)\"\r\n   severity     = \"CRITICAL\"\r\n+  combiner     = \"OR\"\r\n \r\n   conditions {\r\n     display_name = \"uptime check failed\"\r\n     condition_threshold {\r\n"
                 }
             ],
             "date": 1777409234532,
