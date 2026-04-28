@@ -473,7 +473,7 @@ resource "google_monitoring_alert_policy" "uptime_latency_high" {
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
         | group_by sliding(5m), [p95: percentile(val(), 95)]
-        | condition p95 > cast_units(2000, "ms")
+        | condition p95 > 2000 "ms"
       MQL
 
       trigger {
