@@ -257,3 +257,22 @@ variable "backup_bucket_name" {
     error_message = "backup_bucket_name must not be empty"
   }
 }
+
+variable "telegram_bot_token" {
+  description = "Telegram bot token"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "telegram_chat_id" {
+  description = "Telegram chat id"
+  type        = string
+  default     = ""
+}
+
+variable "telegram_thread_id" {
+  description = "Telegram message_thread_id"
+  type        = string
+  default     = ""
+}
