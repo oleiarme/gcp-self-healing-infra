@@ -241,7 +241,7 @@ resource "google_secret_manager_secret_iam_member" "cf_token_access" {
 #   terraform import google_storage_bucket.backup <bucket-name>
 
 resource "google_storage_bucket" "backup" {
-  name = "${var.project_id}-backup-${random_id.bucket_suffix.hex}"
+  name                        = "${var.project_id}-backup-${random_id.bucket_suffix.hex}"
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
