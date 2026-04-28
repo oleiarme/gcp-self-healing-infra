@@ -3,7 +3,7 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 3,
+            "activePatchIndex": 4,
             "patches": [
                 {
                     "date": 1777409234532,
@@ -20,6 +20,10 @@
                 {
                     "date": 1777411618394,
                     "content": "Index: \n===================================================================\n--- \n+++ \n@@ -472,9 +472,9 @@\n         | filter\r\n             (resource.host == '${var.n8n_public_host}')\r\n             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'\r\n         | group_by sliding(5m), [p95: percentile(val(), 95)]\r\n-        | condition p95 > 2000 #miliseconf =2s\r\n+        | condition p95 > 2000\r\n       MQL\r\n \r\n       trigger {\r\n         count = 1\r\n@@ -484,9 +484,9 @@\n \r\n   notification_channels = local.all_notification_channels\r\n \r\n   alert_strategy {\r\n-    auto_close = \"900s\"\r\n+    auto_close = \"1800s\"\r\n   }\r\n \r\n   documentation {\r\n     content   = \"Latency degradation detected (p95 > 2s). This often precedes errors. Investigate before SLO burn. ${local.runbook_url_md} §1.\"\r\n"
+                },
+                {
+                    "date": 1777411903075,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -472,9 +472,9 @@\n         | filter\r\n             (resource.host == '${var.n8n_public_host}')\r\n             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'\r\n         | group_by sliding(5m), [p95: percentile(val(), 95)]\r\n-        | condition p95 > 2000\r\n+        | condition p95 > cast_units(2000, \"ms\")\r\n       MQL\r\n \r\n       trigger {\r\n         count = 1\r\n"
                 }
             ],
             "date": 1777409234532,
