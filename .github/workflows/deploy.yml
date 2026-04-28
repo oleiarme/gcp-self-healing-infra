@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main ]
 
-# КРИТИЧЕСКИЙ ФИКС: Ограничение параллельных запусков
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -80,6 +79,9 @@ jobs:
           # the correct values automatically without per-fork config.
           TF_VAR_wif_allowed_repository: ${{ github.repository }}
           TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
+          TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+          TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
@@ -103,3 +105,6 @@ jobs:
           TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
           TF_VAR_wif_allowed_repository: ${{ github.repository }}
           TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
+          TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+          TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
