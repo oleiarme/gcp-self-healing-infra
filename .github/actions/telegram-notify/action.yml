@@ -1,0 +1,80 @@
+name: "Telegram Notify"
+description: "Send a notification to Telegram (with optional topic/thread support)"
+
+inputs:
+  bot_token:
+    description: "Telegram bot token"
+    required: true
+  chat_id:
+    description: "Telegram chat ID"
+    required: true
+  thread_id:
+    description: "Telegram message_thread_id (topic)"
+    required: false
+    default: ""
+  status:
+    description: "Job status (success/failure/cancelled)"
+    required: true
+  action:
+    description: "Action performed (start/stop)"
+    required: true
+  trigger:
+    description: "Trigger source (schedule/workflow_dispatch)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Send Telegram message
+      shell: bash
+      run: |
+        command -v jq >/dev/null 2>&1 || { echo "::error::jq not found"; exit 1; }
+        command -v curl >/dev/null 2>&1 || { echo "::error::curl not found"; exit 1; }
+
+        STATUS="${{ inputs.status }}"
+        ACTION="${{ inputs.action }}"
+
+        if [ "$ACTION" = "start" ]; then
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="🟢"; TEXT="VM started and healthy"
+          else
+            EMOJI="🔴"; TEXT="VM start FAILED — check Actions log"
+          fi
+        else
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="🌙"; TEXT="VM stopped (night schedule)"
+          else
+            EMOJI="🔴"; TEXT="VM stop FAILED — check Actions log"
+          fi
+        fi
+
+        MESSAGE="${EMOJI} <b>n8n VM Schedule</b>
+        ${TEXT}
+        Action: ${ACTION}
+        Status: ${STATUS}
+        Trigger: ${{ inputs.trigger }}"
+
+        PAYLOAD=$(jq -n \
+          --arg chat_id "${{ inputs.chat_id }}" \
+          --arg text "$MESSAGE" \
+          --arg thread_id "${{ inputs.thread_id }}" \
+          '{
+            chat_id: $chat_id,
+            text: $text,
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          } + (if $thread_id != "" and ($thread_id | test("^[0-9]+$")) then {message_thread_id: ($thread_id | tonumber)} else {} end)')
+
+        RESP=$(curl -s -X POST \
+          "https://api.telegram.org/bot${{ inputs.bot_token }}/sendMessage" \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD" \
+          -w "\n%{http_code}" 2>/dev/null || true)
+
+        HTTP_CODE=$(echo "$RESP" | tail -n1)
+        BODY=$(echo "$RESP" | sed '$d')
+
+        OK=$(echo "$BODY" | jq -r '.ok' 2>/dev/null || echo "false")
+        if [ "$OK" != "true" ] || [ "${HTTP_CODE:-0}" -ge 400 ]; then
+          echo "::warning::Telegram failed (HTTP $HTTP_CODE): $BODY"
+        fi

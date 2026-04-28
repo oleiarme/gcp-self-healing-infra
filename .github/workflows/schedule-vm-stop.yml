@@ -1,0 +1,80 @@
+# Stop VM: resize MIG to 0 on night schedule or manual trigger.
+# Auth via Workload Identity Federation (same as deploy.yml, no JSON keys).
+# Disable via VM_SCHEDULE_ENABLED=false GitHub variable.
+
+name: "Stop VM"
+
+on:
+  schedule:
+    - cron: '0 22 * * 1-5'  # 22:00 UTC Mon-Fri
+  workflow_dispatch: {}
+
+concurrency:
+  group: vm-schedule
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      vars.VM_SCHEDULE_ENABLED != 'false'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT: ${{ vars.TF_VAR_project_id }}
+      GCP_REGION: us-central1
+      MIG_NAME: n8n-mig
+
+    steps:
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Auth to GCP (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resize MIG to 0
+        run: |
+          CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT" \
+            --format="value(targetSize)" 2>/dev/null) || {
+            echo "::error::Failed to get MIG size"
+            exit 1
+          }
+          echo "::notice::Current MIG target size: $CURRENT_SIZE"
+
+          if [ "$CURRENT_SIZE" = "0" ]; then
+            echo "::notice::MIG already at size=0 — skipping resize"
+          else
+            echo "::notice::stop — resizing $MIG_NAME from $CURRENT_SIZE to 0"
+            gcloud compute instance-groups managed resize "$MIG_NAME" \
+              --size=0 \
+              --region="$GCP_REGION" \
+              --project="$GCP_PROJECT" \
+              --quiet || exit 1
+          fi
+
+      - name: Send Telegram notification
+        if: always() && vars.TELEGRAM_CHAT_ID != ''
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+          thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
+          status: ${{ job.status }}
+          action: stop
+          trigger: ${{ github.event_name }}
