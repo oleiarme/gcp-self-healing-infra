@@ -123,11 +123,11 @@ resource "google_storage_bucket_object" "telegram_fn" {
 
 # checkov:skip=CKV_GCP_124: Function is Pub/Sub-triggered (event_trigger), not HTTP-invoked; ingress_settings is irrelevant
 resource "google_cloudfunctions_function" "telegram_alert" {
-  count       = local.telegram_enabled ? 1 : 0
-  name        = "n8n-telegram-alert"
-  description = "Forward Cloud Monitoring alerts to Telegram"
-  runtime     = "python312"
-  region      = var.region
+  count            = local.telegram_enabled ? 1 : 0
+  name             = "n8n-telegram-alert"
+  description      = "Forward Cloud Monitoring alerts to Telegram"
+  runtime          = "python312"
+  region           = var.region
   ingress_settings = "ALLOW_INTERNAL_ONLY"
 
   available_memory_mb   = 128
