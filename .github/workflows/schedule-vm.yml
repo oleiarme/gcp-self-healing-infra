@@ -13,8 +13,8 @@
 #   VM. Resizing to 0/1 is the correct MIG-native approach.
 #
 # Configure schedule via GitHub Variables:
-#   VM_STOP_CRON   — default: '0 22 * * 1-5' (22:00 UTC Mon-Fri)
-#   VM_START_CRON  — default: '0 7 * * 1-5'  (07:00 UTC Mon-Fri)
+#   VM_STOP_CRON   — default: '0 24 * * 1-5' (24:00 UTC Mon-Sun)
+#   VM_START_CRON  — default: '0 9 * * 1-5'  (09:00 UTC Mon-Sun)
 #   VM_SCHEDULE_ENABLED — set to 'false' to disable (default: 'true')
 #
 # Manual trigger: Actions → Schedule VM → Run workflow → pick start/stop.
@@ -26,8 +26,8 @@ on:
     # Two cron entries; the job figures out start vs stop from the hour.
     # Overridable via GitHub vars (but cron expressions in `on.schedule`
     # are static — vars only affect the conditional skip logic below).
-    - cron: '0 7 * * *'   # start: 07:00 UTC Mon-Sun    
-    - cron: '0 22 * * *'  # stop:  22:00 UTC Mon-Sun
+    - cron: '0 9 * * *'   # start: 09:00 UTC Mon-Sun    
+    - cron: '55 23 * * *'  # stop:  23:55 UTC Mon-Sun
   workflow_dispatch:
     inputs:
       action:
