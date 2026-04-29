@@ -391,7 +391,7 @@ resource "google_compute_instance_template" "tpl" {
     source      = google_compute_disk.data.name
     auto_delete = false
     boot        = false
-    device_name = "google-n8n-data"
+    device_name = "n8n-data"
   }
 
   # Shielded VM (Secure Boot + vTPM + integrity monitoring). Free-Tier
@@ -492,7 +492,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
   }
 
   stateful_disk {
-    device_name = "google-n8n-data"
+    device_name = "n8n-data"
     delete_rule = "NEVER"
   }
 
