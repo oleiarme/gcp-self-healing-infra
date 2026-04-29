@@ -336,7 +336,7 @@ resource "google_compute_disk" "data" {
   size = var.disk_size_gb
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
