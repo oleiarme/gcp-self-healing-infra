@@ -36,13 +36,13 @@ retry() {
 
 echo "=== Install Docker ==="
 retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg docker.io cron postgresql-client 
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" apt-transport-https 
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg apt-transport-https
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
 curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
 gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
 retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" google-cloud-cli
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
+  docker.io cron postgresql-client google-cloud-cli
 
 
 
@@ -160,16 +160,43 @@ CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SEC
 
 echo "✅ All secrets fetched successfully."
 
-# Создаем файл .env для гарантированной передачи секретов в Docker
-echo "=== Setup Environment ==="
-mkdir -p /opt/n8n
-cat <<EOF > /opt/n8n/.env
-CF_TOKEN=$CF_TOKEN
-N8N_KEY=$N8N_KEY
-DB_PASSWORD=$DB_PASSWORD
-EOF
+echo "=== Mount Persistent Data Disk ==="
+# Wait for stateful disk attachment
+for i in {1..30}; do
+  if [ -b "/dev/disk/by-id/google-n8n-data" ]; then
+    echo "✅ Disk attached"
+    break
+  fi
+  echo "⏳ Waiting for disk attachment ($i/30)..."
+  sleep 2
+done
 
-chmod 600 /opt/n8n/.env
+DATA_DISK="/dev/disk/by-id/google-n8n-data"
+if [ ! -b "$DATA_DISK" ]; then
+  echo "❌ CRITICAL: Persistent disk not attached"
+  exit 1
+fi
+
+# Format if empty (first boot of the project)
+if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
+  echo "Formatting new persistent disk..."
+  mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DATA_DISK"
+fi
+
+mkdir -p /mnt/data
+# Check and repair filesystem before mount (protection against corruption)
+fsck -a "$DATA_DISK" || true
+mount -o discard,defaults "$DATA_DISK" /mnt/data
+# Append fstab entry only if not already present (idempotent on reboot)
+if ! grep -q 'google-n8n-data' /etc/fstab; then
+  echo "/dev/disk/by-id/google-n8n-data /mnt/data ext4 discard,defaults 0 2" >> /etc/fstab
+fi
+
+# Ensure postgres directory exists and has correct permissions (postgres user is usually uid 70 in alpine)
+mkdir -p /mnt/data/postgres
+chown -R 70:70 /mnt/data/postgres
+
+mkdir -p /opt/n8n
 
 echo "=== Install Ops Agent (logging-only, minimal receiver set) ==="
 # We deliberately ship a logging-only Ops Agent config. Host-metrics and
@@ -214,9 +241,38 @@ echo "=== Pre-flight Variables Check ==="
 
 [ -z "${n8n_image}" ] && { echo "❌ n8n_image is empty"; exit 1; }
 [ -z "${cloudflared_image}" ] && { echo "❌ cloudflared_image is empty"; exit 1; }
+
+echo "=== Resolve AR Images ==="
+# Try Artifact Registry mirror first; fall back to public if missing.
+# (AR repo might not exist on the very first terraform apply, or mirror
+# might have failed in CI).
+N8N_TARGET="${n8n_ar_image}"
+gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
+
+if ! docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss: $N8N_TARGET not found. Falling back to public."
+  N8N_TARGET="${n8n_image}"
+fi
+
+CF_TARGET="${cloudflared_ar_image}"
+if ! docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss: $CF_TARGET not found. Falling back to public."
+  CF_TARGET="${cloudflared_image}"
+fi
 [ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME is empty"; exit 1; }
 
 echo "✅ All required variables present"
+
+# Write .env AFTER AR image resolution so $N8N_TARGET and $CF_TARGET are set
+echo "=== Setup Environment ==="
+cat <<EOF > /opt/n8n/.env
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+N8N_IMAGE=$N8N_TARGET
+CLOUDFLARED_IMAGE=$CF_TARGET
+EOF
+chmod 600 /opt/n8n/.env
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
@@ -238,9 +294,9 @@ services:
       timeout: 3s
       retries: 5
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - /mnt/data/postgres:/var/lib/postgresql/data
   n8n:
-    image: ${n8n_image}
+    image: $${N8N_IMAGE}
     restart: unless-stopped
     ports:
         - "127.0.0.1:5678:5678"
@@ -297,7 +353,7 @@ services:
         condition: service_healthy
         
   cloudflared:
-    image: ${cloudflared_image}
+    image: $${CLOUDFLARED_IMAGE}
     restart: unless-stopped
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
     ports:
@@ -307,8 +363,6 @@ services:
     depends_on:
       n8n:
         condition: service_healthy
-volumes:
-    postgres_data:
 EOF
 
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
@@ -320,7 +374,7 @@ rm -rf /var/lib/apt/lists/*
 
 
 echo "=== Pulling n8n image ==="
-retry timeout 1800 docker pull "${n8n_image}" || {
+retry timeout 1800 docker pull "$N8N_TARGET" || {
   echo "❌ Docker pull failed"
   free -m
   exit 1
@@ -328,7 +382,7 @@ retry timeout 1800 docker pull "${n8n_image}" || {
 
 
 echo "=== Pulling cloudflared image ==="
-retry timeout 600 docker pull "${cloudflared_image}"
+retry timeout 600 docker pull "$CF_TARGET"
 
 
 echo "=== Starting Containers ==="
@@ -364,7 +418,10 @@ fi
 
 
 
-echo "=== Restore latest backup ==="
+echo "=== Backup Restore (DR only) ==="
+# With a persistent data disk, Postgres data survives VM recreation.
+# Restore only runs on first boot (empty PD) or after catastrophic
+# disk failure — it is a DR mechanism, not a deploy mechanism.
 SKIP_RESTORE=false
 
 echo "=== Checking if DB already has data ==="
@@ -465,7 +522,7 @@ import subprocess
 import time
 
 START_TIME = time.time()
-BOOTSTRAP_WINDOW = 2400  # 30 minutes
+BOOTSTRAP_WINDOW = 600  # 10 minutes — matches MIG initial_delay_sec
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
