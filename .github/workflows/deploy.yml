@@ -39,10 +39,8 @@ jobs:
         uses: hashicorp/setup-terraform@v4
 
       - name: Terraform Init
-        run: |
-          terraform init -reconfigure \
-          -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET }}" \
-          -backend-config="prefix=terraform/state"
+        run: terraform init -reconfigure -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET }}" -backend-config="prefix=terraform/state"
+        
       - name: Terraform Validate
         run: terraform validate
       
