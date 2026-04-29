@@ -1,0 +1,22 @@
+{
+    "sourceFile": ".github/workflows/schedule-vm-start.yml",
+    "activeCommit": 0,
+    "commits": [
+        {
+            "activePatchIndex": 1,
+            "patches": [
+                {
+                    "date": 1777457416889,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n"
+                },
+                {
+                    "date": 1777457431652,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -5,9 +5,9 @@\n name: \"Start VM\"\r\n \r\n on:\r\n   schedule:\r\n-    - cron: '0 6 * * *'  # 06:00 UTC Mon-Sun\r\n+    - cron: '0 5 * * *'  # 05:00 UTC Mon-Sun\r\n   workflow_dispatch: {}\r\n \r\n concurrency:\r\n   group: vm-schedule\r\n"
+                }
+            ],
+            "date": 1777457416889,
+            "name": "Commit-0",
+            "content": "# Start VM: resize MIG to 1 on morning schedule or manual trigger.\r\n# Auth via Workload Identity Federation (same as deploy.yml, no JSON keys).\r\n# Disable via VM_SCHEDULE_ENABLED=false GitHub variable.\r\n\r\nname: \"Start VM\"\r\n\r\non:\r\n  schedule:\r\n    - cron: '0 6 * * *'  # 06:00 UTC Mon-Sun\r\n  workflow_dispatch: {}\r\n\r\nconcurrency:\r\n  group: vm-schedule\r\n  cancel-in-progress: false\r\n\r\njobs:\r\n  start:\r\n    runs-on: ubuntu-latest\r\n    timeout-minutes: 20\r\n    if: >-\r\n      github.event_name == 'workflow_dispatch' ||\r\n      vars.VM_SCHEDULE_ENABLED != 'false'\r\n\r\n    permissions:\r\n      contents: read\r\n      id-token: write\r\n\r\n    env:\r\n      GCP_PROJECT: ${{ vars.TF_VAR_project_id }}\r\n      GCP_REGION: us-central1\r\n      MIG_NAME: n8n-mig\r\n      N8N_HOST: ${{ vars.TF_VAR_n8n_public_host }}\r\n\r\n    steps:\r\n      - name: Checkout scripts & actions\r\n        uses: actions/checkout@v4\r\n        with:\r\n          sparse-checkout: |\r\n            .github/scripts\r\n            .github/actions\r\n          sparse-checkout-cone-mode: false\r\n\r\n      - name: Auth to GCP (WIF)\r\n        uses: google-github-actions/auth@v3\r\n        with:\r\n          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}\r\n          service_account: ${{ secrets.WIF_SA }}\r\n\r\n      - name: Set up Cloud SDK\r\n        uses: google-github-actions/setup-gcloud@v2\r\n\r\n      - name: Resize MIG to 1\r\n        run: |\r\n          CURRENT_SIZE=$(gcloud compute instance-groups managed describe \"$MIG_NAME\" \\\r\n            --region=\"$GCP_REGION\" \\\r\n            --project=\"$GCP_PROJECT\" \\\r\n            --format=\"value(targetSize)\" 2>/dev/null) || {\r\n            echo \"::error::Failed to get MIG size\"\r\n            exit 1\r\n          }\r\n          echo \"::notice::Current MIG target size: $CURRENT_SIZE\"\r\n\r\n          if [ \"$CURRENT_SIZE\" = \"1\" ]; then\r\n            echo \"::notice::MIG already at size=1 — skipping resize\"\r\n          else\r\n            echo \"::notice::start — resizing $MIG_NAME from $CURRENT_SIZE to 1\"\r\n            gcloud compute instance-groups managed resize \"$MIG_NAME\" \\\r\n              --size=1 \\\r\n              --region=\"$GCP_REGION\" \\\r\n              --project=\"$GCP_PROJECT\" \\\r\n              --quiet || exit 1\r\n          fi\r\n\r\n      - name: Wait for VM to become healthy\r\n        run: |\r\n          bash .github/scripts/wait-gcp-mig.sh \\\r\n            --name \"$MIG_NAME\" \\\r\n            --region \"$GCP_REGION\" \\\r\n            --project \"$GCP_PROJECT\" \\\r\n            --timeout 900 \\\r\n            --verbose\r\n\r\n      - name: Health check (n8n /healthz)\r\n        if: env.N8N_HOST != ''\r\n        run: |\r\n          bash .github/scripts/wait-url.sh \\\r\n            --url \"https://$N8N_HOST/healthz\" \\\r\n            --code 200 \\\r\n            --timeout 600\r\n\r\n      - name: Send Telegram notification\r\n        if: always() && vars.TELEGRAM_CHAT_ID != ''\r\n        uses: ./.github/actions/telegram-notify\r\n        with:\r\n          bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}\r\n          chat_id: ${{ vars.TELEGRAM_CHAT_ID }}\r\n          thread_id: ${{ vars.TELEGRAM_THREAD_ID }}\r\n          status: ${{ job.status }}\r\n          action: start\r\n          trigger: ${{ github.event_name }}"
+        }
+    ]
+}
