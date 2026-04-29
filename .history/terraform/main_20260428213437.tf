@@ -2,10 +2,7 @@ terraform {
   required_version = ">= 1.0"
 
   # Backend настраивается через -backend-config=backend.conf
-  # Placeholder bucket — перезаписывается -backend-config="bucket=..." в CI
-  backend "gcs" {
-    bucket = "tf-state-placeholder"
-  }
+  backend "gcs" {}
 
   required_providers {
     google = {
@@ -462,7 +459,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
     # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
     # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
     # (no initial_delay on the replacement path, only detection + startup).
-    initial_delay_sec = 2400
+    initial_delay_sec = 1800
   }
 
   update_policy {
