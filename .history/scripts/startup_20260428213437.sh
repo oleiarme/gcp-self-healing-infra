@@ -468,10 +468,18 @@ BOOTSTRAP_WINDOW = 1800  # 30 minutes
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
-
+        
     def do_GET(self):
         uptime = time.time() - START_TIME
 
+        # Phase 1: bootstrap — always healthy
+        if uptime < BOOTSTRAP_WINDOW:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
+
+        # Phase 2: real checks
         try:
             # check n8n
             n8n = subprocess.run(
@@ -487,29 +495,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 stderr=subprocess.DEVNULL
             )
 
-            ready = (n8n.returncode == 0 and pg.returncode == 0)
+            if n8n.returncode == 0 and pg.returncode == 0:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"FAIL")
 
         except Exception:
-            ready = False
-
-        # 🔹 Phase 1: bootstrap
-        if not ready and uptime < BOOTSTRAP_WINDOW:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"BOOTSTRAP")
-            return
-
-        # 🔹 Phase 2: real state
-        if ready:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-        else:
             self.send_response(500)
             self.end_headers()
-            self.wfile.write(b"FAIL")
-
-
+            self.wfile.write(b"ERROR")
 
 with socketserver.TCPServer(("", 8080), Handler) as httpd:
     httpd.serve_forever()
