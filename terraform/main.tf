@@ -125,6 +125,13 @@ resource "google_project_iam_member" "vm_sa_metric_writer" {
 locals {
   wif_enforcement_enabled = var.wif_pool_id != "" && var.wif_provider_id != ""
   wif_expected_condition  = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
+
+  # Short digest for tagging AR images consistently with CI
+  n8n_digest_short = substr(element(split("@sha256:", var.n8n_image), 1), 0, 8)
+  cf_digest_short  = substr(element(split("@sha256:", var.cloudflared_image), 1), 0, 8)
+  ar_prefix        = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+  n8n_ar_image     = "${local.ar_prefix}/n8n:${var.n8n_image_tag}-${local.n8n_digest_short}"
+  cf_ar_image      = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}-${local.cf_digest_short}"
 }
 
 data "google_iam_workload_identity_pool_provider" "github" {
@@ -310,7 +317,32 @@ resource "google_storage_bucket" "logs_audit" {
 }
 
 # ==========================================
+# 1.6 ARTIFACT REGISTRY & PERSISTENT DATA
+# ==========================================
+
+# checkov:skip=CKV_GCP_84: Artifact Registry CMK encryption is overkill for a Free Tier project
+resource "google_artifact_registry_repository" "docker" {
+  location      = var.region
+  repository_id = "n8n-docker"
+  format        = "DOCKER"
+  description   = "Docker mirror for n8n/cloudflared to bypass Docker Hub rate limits and speed up cold starts"
+}
+
+# checkov:skip=CKV_GCP_37: CSEK encryption is overkill for a Free Tier project; Google-managed encryption is sufficient
+resource "google_compute_disk" "data" {
+  name = "google-n8n-data"
+  type = "pd-standard"
+  zone = var.zone
+  size = var.disk_size_gb
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# ==========================================
 # 2. COMPUTE RESOURCES
+
 # ==========================================
 
 resource "google_compute_health_check" "hc" {
@@ -350,9 +382,16 @@ resource "google_compute_instance_template" "tpl" {
 
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
-    disk_size_gb = 30
+    disk_size_gb = 10
     auto_delete  = true
     boot         = true
+  }
+
+  disk {
+    source      = google_compute_disk.data.name
+    auto_delete = false
+    boot        = false
+    device_name = "google-n8n-data"
   }
 
   # Shielded VM (Secure Boot + vTPM + integrity monitoring). Free-Tier
@@ -399,6 +438,9 @@ resource "google_compute_instance_template" "tpl" {
       db_port               = "5432"
       n8n_image             = var.n8n_image
       cloudflared_image     = var.cloudflared_image
+      n8n_ar_image          = local.n8n_ar_image
+      cloudflared_ar_image  = local.cf_ar_image
+      ar_location           = var.region
       BACKUP_BUCKET_NAME    = var.backup_bucket_name
 
     })
@@ -442,51 +484,36 @@ resource "google_compute_region_instance_group_manager" "mig" {
   name                      = "n8n-mig"
   base_instance_name        = "n8n"
   region                    = var.region
-  distribution_policy_zones = var.mig_zones
+  distribution_policy_zones = [var.zone]
   target_size               = 1
 
   version {
     instance_template = google_compute_instance_template.tpl.id
   }
 
+  stateful_disk {
+    device_name = "google-n8n-data"
+    delete_rule = "NEVER"
+  }
+
   auto_healing_policies {
-    health_check = google_compute_health_check.hc.id
-    # 600s > Docker start_period (420s) + 3 min safety margin.
-    # startup.sh on e2-micro must do: apt update + install docker + pull two
-    # container images (n8n is ~500MB uncompressed) + start containers + run
-    # n8n DB migrations. Cold path takes 6–10 min; giving MIG 10 min before
-    # it starts probing avoids spurious recreation during legitimate boot.
-    #
-    # After initial_delay expires, GCP probes /healthz every 10s. With
-    # unhealthy_threshold=5 and check_interval=10s, detection takes ~50s, so
-    # worst-case cold MTTR ≈ 600 (initial_delay) + 50 (detection) + 360
-    # (new-VM startup) ≈ 17 min. Warm replace after template change: ~6 min
-    # (no initial_delay on the replacement path, only detection + startup).
-    initial_delay_sec = 2400
+    health_check      = google_compute_health_check.hc.id
+    initial_delay_sec = 600
   }
 
   update_policy {
     type                         = "PROACTIVE"
     minimal_action               = "REPLACE"
-    max_surge_fixed              = 0
-    max_unavailable_fixed        = length(var.mig_zones) # must be ≥ number of distribution zones on a regional MIG
-    replacement_method           = "RECREATE"
-    instance_redistribution_type = "NONE" # target_size=1; redistribution is meaningless and would cause needless relocations
+    max_surge_fixed              = 1
+    max_unavailable_fixed        = 0
+    replacement_method           = "SUBSTITUTE"
+    instance_redistribution_type = "NONE"
   }
 }
 
 # ==========================================
 # Cost guardrail (Phase 4)
 # ==========================================
-# Free-Tier envelope is ~$0/mo in steady state, so any material spend is
-# either a misconfiguration (e.g. VM size increased by accident, surprise
-# egress) or a conscious scaling decision. Alerting at 50/90/100% of a
-# hard monthly cap (var.monthly_budget_usd, default $5) gives us three
-# chances to notice before a real bill. The alert fans out to
-# local.all_notification_channels (see monitoring.tf) — email always,
-# Slack when var.slack_auth_token is set — so billing notifications
-# reach the same destinations as every other SLO / startup / log-
-# ingestion alert and stay consistent with Runbook §6.1.
 resource "google_billing_budget" "monthly_cap" {
   # Opt-in: leaving var.billing_account_id empty disables the budget
   # entirely. The rest of the stack is project-scoped and does not need

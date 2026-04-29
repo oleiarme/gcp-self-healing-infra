@@ -18,16 +18,10 @@ variable "zone" {
 # --------------------------------------------------------
 # Resilience & DR (Phase 4 of docs/slo-roadmap)
 # --------------------------------------------------------
-# Zones the regional MIG is allowed to place the single VM in. Free Tier
-# still applies: at any instant exactly one e2-micro runs, anywhere in
-# us-central1. But on a zonal incident the MIG relocates to a surviving
-# zone, which is the entire point of moving off the old single-zone
-# google_compute_instance_group_manager.
-variable "mig_zones" {
-  description = "Zones the regional MIG may place its single VM in. Must all be within var.region. For us-central1 the Free-Tier-eligible zones are a/b/f."
-  type        = list(string)
-  default     = ["us-central1-a", "us-central1-b", "us-central1-f"]
-}
+# mig_zones removed to fix tflint warning.
+# Since we use a zonal persistent disk, the MIG must be pinned to var.zone
+# to ensure the disk can be attached to the VM.
+
 
 variable "billing_account_id" {
   description = "GCP billing account ID the project is attached to (format: 'AAAAAA-BBBBBB-CCCCCC'). When set, enables the google_billing_budget cost guardrail; when empty (default), the budget resource is not created and cost alerting is left off. Find the ID via `gcloud beta billing accounts list`."
@@ -275,4 +269,21 @@ variable "telegram_thread_id" {
   description = "Telegram message_thread_id"
   type        = string
   default     = ""
+}
+variable "disk_size_gb" {
+  description = "Size of the persistent data disk for Postgres"
+  type        = number
+  default     = 20
+}
+
+variable "n8n_image_tag" {
+  description = "Tag for the n8n image"
+  type        = string
+  default     = "2.17.7"
+}
+
+variable "cloudflared_image_tag" {
+  description = "Tag for the cloudflared image"
+  type        = string
+  default     = "2026.3.0"
 }

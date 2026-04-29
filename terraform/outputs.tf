@@ -125,3 +125,12 @@ output "billing_budget_name" {
   description = "Resource name of the monthly spend cap billing budget. Null when var.billing_account_id is empty (budget opted out). Edit the thresholds / amount by changing var.monthly_budget_usd and re-applying."
   value       = length(google_billing_budget.monthly_cap) > 0 ? google_billing_budget.monthly_cap[0].name : null
 }
+output "artifact_registry_repo" {
+  description = "Artifact Registry repository for Docker images"
+  value       = google_artifact_registry_repository.docker.id
+}
+
+output "persistent_data_disk" {
+  description = "The persistent data disk used for Postgres"
+  value       = google_compute_disk.data.id
+}
