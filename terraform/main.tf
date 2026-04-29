@@ -382,7 +382,7 @@ resource "google_compute_instance_template" "tpl" {
 
   disk {
     source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
-    disk_size_gb = 10
+    disk_size_gb = 20
     auto_delete  = true
     boot         = true
   }
