@@ -328,6 +328,7 @@ resource "google_artifact_registry_repository" "docker" {
   description   = "Docker mirror for n8n/cloudflared to bypass Docker Hub rate limits and speed up cold starts"
 }
 
+# checkov:skip=CKV_GCP_37: CSEK encryption is overkill for a Free Tier project; Google-managed encryption is sufficient
 resource "google_compute_disk" "data" {
   name = "google-n8n-data"
   type = "pd-standard"
