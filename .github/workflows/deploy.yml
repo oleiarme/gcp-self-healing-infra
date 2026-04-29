@@ -40,9 +40,10 @@ jobs:
 
       - name: Terraform Init
         run: |
-          terraform init \
+          terraform init -reconfigure \
             -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET }}" \
             -backend-config="prefix=terraform/state"
+          
 
       - name: Terraform Validate
         run: terraform validate
