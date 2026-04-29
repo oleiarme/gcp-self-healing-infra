@@ -48,6 +48,55 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
       
+      # Mirror public images into AR BEFORE plan/apply so the new VM finds
+      # the correct digest-tagged image immediately.  Skips on first deploy
+      # when the AR repo doesn't exist yet (VM falls back to public).
+      #
+      # Image refs are passed as explicit env vars (no file parsing).
+      # Defaults mirror terraform/variables.tf — update both on version bumps.
+      - name: Mirror images to Artifact Registry
+        id: mirror
+        continue-on-error: true
+        working-directory: .
+        run: |
+          set -eo pipefail
+          AR="${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}"
+          # Check if AR repo exists (skip on first deploy)
+          if ! gcloud artifacts repositories describe "$AR_REPO" \
+               --location="$REGION" --project="$PROJECT" \
+               --format="value(name)" 2>/dev/null; then
+            echo "::notice::AR repo does not exist yet (first deploy?). Skipping mirror."
+            exit 0
+          fi
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          # Digest-short prefix (first 8 chars) — mirrors terraform locals
+          N8N_DS="${N8N_IMAGE##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
+          CF_DS="${CF_IMAGE##*@sha256:}"; CF_DS="${CF_DS:0:8}"
+          for PAIR in "${N8N_IMAGE} ${AR}/n8n:${N8N_TAG}-${N8N_DS}" \
+                      "${CF_IMAGE} ${AR}/cloudflared:${CF_TAG}-${CF_DS}"; do
+            SRC="${PAIR%% *}"
+            DST="${PAIR#* }"
+            echo ">>> Mirroring ${SRC} → ${DST}"
+            docker pull "${SRC}"
+            docker tag  "${SRC}" "${DST}"
+            docker push "${DST}"
+            AR_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${DST}" 2>/dev/null || echo "unknown")
+            echo "    AR digest: ${AR_DIGEST}"
+          done
+        env:
+          PROJECT: ${{ vars.TF_VAR_project_id }}
+          REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
+          AR_REPO: n8n-docker
+          N8N_IMAGE: ${{ vars.TF_VAR_n8n_image || 'docker.n8n.io/n8nio/n8n:2.17.7@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af' }}
+          CF_IMAGE: ${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
+          N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || '2.17.7' }}
+          CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
+
+      - name: Warn on mirror failure
+        if: steps.mirror.outcome == 'failure'
+        run: |
+          echo "::warning::Artifact Registry mirror failed. VMs will fall back to public registries (slower boots, Docker Hub rate limits apply)."
+
       - name: Terraform Plan
         run: terraform plan -out=tfplan
         env:

@@ -276,3 +276,20 @@ variable "telegram_thread_id" {
   type        = string
   default     = ""
 }
+variable "disk_size_gb" {
+  description = "Size of the persistent data disk for Postgres"
+  type        = number
+  default     = 30
+}
+
+variable "n8n_image_tag" {
+  description = "Tag for the n8n image"
+  type        = string
+  default     = "2.17.7"
+}
+
+variable "cloudflared_image_tag" {
+  description = "Tag for the cloudflared image"
+  type        = string
+  default     = "2026.3.0"
+}
