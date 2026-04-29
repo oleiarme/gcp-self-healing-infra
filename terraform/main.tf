@@ -2,7 +2,10 @@ terraform {
   required_version = ">= 1.0"
 
   # Backend настраивается через -backend-config=backend.conf
-  backend "gcs" {}
+  # Placeholder bucket — перезаписывается -backend-config="bucket=..." в CI
+  backend "gcs" {
+    bucket = "tf-state-placeholder"
+  }
 
   required_providers {
     google = {

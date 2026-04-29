@@ -40,12 +40,9 @@ jobs:
 
       - name: Terraform Init
         run: |
-          echo "Bucket value: '${{ secrets.TF_BACKEND_BUCKET }}'"
-          if [ -z "${{ secrets.TF_BACKEND_BUCKET }}" ]; then
-            echo "❌ TF_BACKEND_BUCKET is EMPTY"
-            exit 1
-          fi
-          terraform init -reconfigure -no-color -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET || 'fallback-bucket-name' }}" -backend-config="prefix=terraform/state"
+          terraform init -reconfigure \
+            -backend-config="bucket=${{ secrets.TF_BACKEND_BUCKET }}" \
+            -backend-config="prefix=terraform/state"
           
 
       - name: Terraform Validate
