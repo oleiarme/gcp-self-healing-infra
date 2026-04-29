@@ -504,9 +504,9 @@ resource "google_compute_region_instance_group_manager" "mig" {
   update_policy {
     type                         = "PROACTIVE"
     minimal_action               = "REPLACE"
-    max_surge_fixed              = 1
-    max_unavailable_fixed        = 0
-    replacement_method           = "SUBSTITUTE"
+    max_surge_fixed              = 0
+    max_unavailable_fixed        = 1
+    replacement_method           = "RECREATE"
     instance_redistribution_type = "NONE"
   }
 }
