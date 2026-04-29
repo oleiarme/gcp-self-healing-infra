@@ -522,7 +522,7 @@ import subprocess
 import time
 
 START_TIME = time.time()
-BOOTSTRAP_WINDOW = 600  # 10 minutes — matches MIG initial_delay_sec
+BOOTSTRAP_WINDOW = 1800  # 30 minutes — matches MIG initial_delay_sec
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
