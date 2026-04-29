@@ -3,11 +3,15 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 0,
+            "activePatchIndex": 1,
             "patches": [
                 {
                     "date": 1777463435203,
                     "content": "Index: \n===================================================================\n--- \n+++ \n"
+                },
+                {
+                    "date": 1777480310117,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -462,9 +462,9 @@\n import subprocess\r\n import time\r\n \r\n START_TIME = time.time()\r\n-BOOTSTRAP_WINDOW = 1800  # 30 minutes\r\n+BOOTSTRAP_WINDOW = 2400  # 30 minutes\r\n \r\n class Handler(http.server.SimpleHTTPRequestHandler):\r\n     def log_message(self, format, *args):\r\n         pass\r\n@@ -476,16 +476,18 @@\n             # check n8n\r\n             n8n = subprocess.run(\r\n                 [\"curl\", \"-sf\", \"http://127.0.0.1:5678/healthz\"],\r\n                 stdout=subprocess.DEVNULL,\r\n-                stderr=subprocess.DEVNULL\r\n+                stderr=subprocess.DEVNULL,\r\n+                timeout=2\r\n             )\r\n \r\n             # check postgres\r\n             pg = subprocess.run(\r\n-                [\"docker\", \"compose\", \"-f\", \"/opt/n8n/docker-compose.yml\", \"exec\", \"-T\", \"postgres\", \"pg_isready\", \"-U\", \"n8n\"],\r\n+                [\"pg_isready\", \"-h\", \"127.0.0.1\", \"-p\", \"5432\", \"-U\", \"n8n\"],\r\n                 stdout=subprocess.DEVNULL,\r\n-                stderr=subprocess.DEVNULL\r\n+                stderr=subprocess.DEVNULL,\r\n+                timeout=2\r\n             )\r\n \r\n             ready = (n8n.returncode == 0 and pg.returncode == 0)\r\n \r\n"
                 }
             ],
             "date": 1777463435203,
