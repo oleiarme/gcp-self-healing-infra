@@ -6,7 +6,7 @@ name: "Stop VM"
 
 on:
   schedule:
-    - cron: '0 22 * * 1-5'  # 22:00 UTC Mon-Fri
+    - cron: '0 22 * * *'  # 22:00 UTC Mon-Sun
   workflow_dispatch: {}
 
 concurrency:
