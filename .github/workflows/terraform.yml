@@ -96,10 +96,11 @@ jobs:
           framework: terraform
           quiet: true
           output_format: cli
-          # Skip CKV_GCP_82 (boot disk encryption KMS) — Free Tier project
-          # uses Google-managed encryption only; CKV_GCP_38 same reason.
-          skip_check: CKV_GCP_82,CKV_GCP_38,CKV_GCP_62
-          
+          # CKV_GCP_62: terminal audit bucket (logs_audit) has no further log target.
+          # CKV_GCP_83: Pub/Sub alert topic carries non-sensitive payloads; CSEK overkill.
+          # CKV_GCP_124: Cloud Function is Pub/Sub-triggered, not HTTP; ingress N/A.
+          # CKV_GCP_84, CKV_GCP_37: AR repo and VM Disk CSEK — Free Tier; Google-managed encryption sufficient.
+          skip_check: CKV_GCP_82,CKV_GCP_38,CKV_GCP_62,CKV_GCP_83,CKV_GCP_124,CKV_GCP_84,CKV_GCP_37
 
   trivy-images:
     name: trivy (pinned images)
