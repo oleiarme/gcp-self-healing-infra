@@ -254,16 +254,10 @@ echo "=== Resolve AR Images ==="
 N8N_TARGET="${n8n_ar_image}"
 gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
 
-if ! docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
-  echo "⚠️ AR miss: $N8N_TARGET not found. Falling back to public."
-  N8N_TARGET="${n8n_image}"
-fi
+echo "Using AR image: $N8N_TARGET"
 
 CF_TARGET="${cloudflared_ar_image}"
-if ! docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
-  echo "⚠️ AR miss: $CF_TARGET not found. Falling back to public."
-  CF_TARGET="${cloudflared_image}"
-fi
+echo "Using AR image: $CF_TARGET"
 [ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME is empty"; exit 1; }
 
 echo "✅ All required variables present"
