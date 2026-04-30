@@ -118,7 +118,7 @@ if ! command -v gcloud >/dev/null 2>&1; then
   gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
   (
     set +e
-    if retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli; then
+    if retry timeout 300 apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli; then
       echo "✅ gcloud installed successfully"
     else
       echo "⚠️ gcloud install failed (will retry check later)"
@@ -435,14 +435,21 @@ EOF
 
 echo "=== Waiting for docker-compose plugin ==="
 # Wait for the background download started at the beginning of the script
+COMPOSE_OK=false
 for i in {1..30}; do
   if [ -x /usr/local/lib/docker/cli-plugins/docker-compose ]; then
+    COMPOSE_OK=true
     echo "✅ docker-compose ready"
     break
   fi
   echo "⏳ Waiting for docker-compose ($i/30)..."
   sleep 2
 done
+
+if [ "$COMPOSE_OK" != "true" ]; then
+  echo "❌ docker-compose failed to install"
+  exit 1
+fi
 
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
 echo "=== Cleaning package cache before image pull ==="
