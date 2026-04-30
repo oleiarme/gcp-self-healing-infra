@@ -145,6 +145,26 @@ The workflow will:
 
 > ⚠️ Always keep `target_size = 1` and `max_surge_fixed = 0` in the MIG config. Running two e2-micro instances simultaneously exits Free Tier.
 
+Performance Optimization Case Study
+
+    Problem: 40-minute cold starts
+    Initial setup used Supabase (hosted in a different region) with Ops Agent installed.
+    This caused:
+    - Cross-region latency for every DB connection
+    - CPU 99% utilization during startup
+    - MTTR: ~40 minutes (unacceptable for 99.5% SLO)
+
+    Solution: Cloud SQL in-region + optimization
+    1. Migrated to Cloud SQL PostgreSQL in the same us-central1 region
+    2. Removed Ops Agent (exceeded e2-micro IO budget)
+    3. Result: 3x faster recovery — MTTR dropped to ~18 minutes
+
+    Roadmap: Golden Image
+    Next optimization: create a golden disk with pre-loaded Docker images.
+    - Target MTTR: 7-9 minutes (2x faster than current)
+    - Trade-off: Slight increase in disk usage (still within Free Tier 30GB)
+    - Status: Pending (see initial_delay_sec discussion in Runbook §2)
+
 ## Prerequisites
 
 - GCP project with billing enabled (for API access; cost stays $0 within Free Tier)
