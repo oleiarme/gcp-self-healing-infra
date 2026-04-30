@@ -387,10 +387,10 @@ resource "google_compute_instance_template" "tpl" {
 
 
   disk {
-    source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
-    disk_size_gb = 20
-    auto_delete  = true
-    boot         = true
+    source_image         = "cos-cloud/cos-stable"
+    disk_size_gb         = 30
+    auto_delete          = true
+    boot                 = true
   }
 
   disk {
@@ -434,7 +434,8 @@ resource "google_compute_instance_template" "tpl" {
     # rely on interactive SSH — everything is either a `terraform apply`
     # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
     block-project-ssh-keys = "true"
-    startup-script = templatefile("${path.module}/../scripts/startup.sh", {
+    startup-script = templatefile("${path.module}/../scripts/startup_cos.sh", {
+      project_id            = var.project_id
       db_host               = local.effective_db_host
       db_user               = var.db_user
       DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
@@ -504,7 +505,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 2400
+    initial_delay_sec = 540
   }
 
   update_policy {
