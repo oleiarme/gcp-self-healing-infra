@@ -1,4 +1,9 @@
+
+
 name: terraform-validate
+permissions:
+  contents: read
+  pull-requests: write
 concurrency:
   group: terraform-${{ github.ref }}
   cancel-in-progress: true
@@ -193,3 +198,44 @@ jobs:
           exit-code: "0"
           ignore-unfixed: true
           vuln-type: os,library
+      
+  terraform-plan:
+    name: Terraform Plan (PR)
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init (no backend)
+        run: terraform init -backend=false
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="project_id=dummy" \
+            -var="region=us-central1" \
+            -no-color \
+            -input=false \
+            -out=tfplan || true
+
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/plan.txt
+      - name: Comment plan in PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: terraform/plan.txt

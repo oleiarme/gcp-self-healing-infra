@@ -379,15 +379,21 @@ rm -rf /var/lib/apt/lists/*
 
 
 echo "=== Pulling n8n image ==="
-retry timeout 1800 docker pull "$N8N_TARGET" || {
-  echo "❌ Docker pull failed"
+if ! retry timeout 1800 docker pull "$N8N_TARGET"; then
+  echo "❌ Docker pull failed after retries: $N8N_TARGET"
+  docker info || true
   free -m
   exit 1
-}
+fi
 
 
 echo "=== Pulling cloudflared image ==="
-retry timeout 600 docker pull "$CF_TARGET"
+if ! retry timeout 600 docker pull "$CF_TARGET"; then
+  echo "❌ Docker pull failed after retries: $CF_TARGET"
+  docker info || true
+  free -m
+  exit 1
+fi
 
 
 echo "=== Starting Containers ==="

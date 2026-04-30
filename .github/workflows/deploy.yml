@@ -56,7 +56,7 @@ jobs:
       # Defaults mirror terraform/variables.tf — update both on version bumps.
       - name: Mirror images to Artifact Registry
         id: mirror
-        continue-on-error: true
+        continue-on-error: false
         working-directory: .
         run: |
           set -eo pipefail
@@ -65,7 +65,7 @@ jobs:
           if ! gcloud artifacts repositories describe "$AR_REPO" \
                --location="$REGION" --project="$PROJECT" \
                --format="value(name)" 2>/dev/null; then
-            echo "::notice::AR repo does not exist yet (first deploy?). Skipping mirror."
+            echo "::notice::BOOTSTRAP MODE: VM will pull from public registry"
             exit 0
           fi
           gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
@@ -79,9 +79,35 @@ jobs:
             echo ">>> Mirroring ${SRC} → ${DST}"
             docker pull "${SRC}"
             docker tag  "${SRC}" "${DST}"
-            docker push "${DST}"
+            for i in {1..5}; do
+              docker push "${DST}" && break
+              echo "Push retry $i..."
+              sleep 5
+            done
             AR_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${DST}" 2>/dev/null || echo "unknown")
             echo "    AR digest: ${AR_DIGEST}"
+          done
+          sleep 5 
+
+          echo ">>> Verifying images in Artifact Registry..."
+
+          gcloud artifacts docker images list "${AR}/n8n" --include-tags \
+            --format="get(TAGS)" | grep "${N8N_TAG}-${N8N_DS}"
+
+          gcloud artifacts docker images list "${AR}/cloudflared" --include-tags \
+            --format="get(TAGS)" | grep "${CF_TAG}-${CF_DS}"
+          echo ">>> Testing docker pull from Artifact Registry..."
+
+          for i in {1..5}; do
+            docker pull "${AR}/n8n:${N8N_TAG}-${N8N_DS}" && break
+            echo "Pull retry $i..."
+            sleep 5
+          done
+
+          for i in {1..5}; do
+            docker pull "${AR}/cloudflared:${CF_TAG}-${CF_DS}" && break
+            echo "Pull retry $i..."
+            sleep 5
           done
         env:
           PROJECT: ${{ vars.TF_VAR_project_id }}
