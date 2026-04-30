@@ -9,7 +9,7 @@ on:
     paths:
       - 'terraform/**'
       - 'scripts/**'
-      - 'docs/drills/**'
+      - 'docs/**'
       - '.github/workflows/**'
 
 jobs:
