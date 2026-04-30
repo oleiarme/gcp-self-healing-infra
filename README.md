@@ -68,6 +68,16 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 - **Keyless CI/CD**: Workload Identity Federation — no JSON service account keys stored anywhere
 - **Defense in depth**: `tflint` + `tfsec` + `Checkov` + `shellcheck` + `trivy` on every PR
 
+## Why This Matters (Business Value)
+
+    While this project is technically dense, here is the bottom line for decision-makers:
+
+    - 💰 Zero Cost: Runs entirely on GCP Free Tier ($0/month) vs. $50–200/month for managed n8n or n8n.cloud hosting. Ideal for startups and personal automation.
+    - 🛡️ Reliability by Design: 99.5% SLO (max 3.6h downtime/month). The infrastructure heals itself — no 3am pages for crashed VMs.
+    - 🔒 Enterprise-Grade Security: Keyless CI/CD (Workload Identity), least-privilege IAM, and secrets never stored in plaintext. Complies with strict audit requirements.
+    - ⚡ Fast Recovery: <17 min cold-start recovery, <7 min warm replacment. We measure it, we drill it, we prove it.
+    - 📉 Risk Reduction: Prevents "zonal outage" scenarios and offers Point-in-Time Recovery (PITR) for data, turning disasters into minor blips.
+
 ## How Self-Healing Works
 
 1. **GCP Health Check** polls `http://VM:8080/` every **10s** (timeout 10s). 2 successes → healthy; 7 consecutive failures → unhealthy.
@@ -386,8 +396,17 @@ After `terraform apply`:
 
 To reduce Free Tier egress and IP costs when n8n is not actively used, the VM is stopped every night at **22:00 UTC** and started every morning at **07:00 UTC** (Mon–Fri) via scheduled GitHub Actions workflows.
 
-Disable by setting the GitHub variable `VM_SCHEDULE_ENABLED=false`.
+Disable by setting the GitHub variable 
+`VM_SCHEDULE_ENABLED=false`.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Skills Demonstrated (for Recruiters)
+    SRE: SLO/SLI, error budgets, burn-rate alerting, post-mortem culture, chaos drills
+    Cloud: GCP (MIG, Cloud SQL, Secret Manager, IAM, Monitoring)
+    IaC: Terraform (modules, remote state, import, prevent_destroy)
+    CI/CD: GitHub Actions, WIF, branch protection, automated digest refresh
+    Security: Least privilege, secret rotation, static analysis (tfsec/checkov/trivy)
+    Observability: Custom dashboards, multi-window alerts, log-based metrics
