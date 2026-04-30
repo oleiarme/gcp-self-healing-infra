@@ -5,7 +5,7 @@ permissions:
   contents: read
   pull-requests: write
 concurrency:
-  group: terraform-${{ github.ref }}
+  group: terraform-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 on:
@@ -32,6 +32,7 @@ jobs:
               - 'scripts/**'
   terraform:
     needs: changes
+    if: needs.changes.outputs.terraform == 'true'
     name: Validate & Lint
     runs-on: ubuntu-latest
     defaults:
@@ -52,8 +53,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.terraform.d/plugin-cache
-          key: terraform-${{ runner.os }}
-        # -backend=false — no real GCS bucket needed for validation
+          key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}        # -backend=false — no real GCS bucket needed for validation
+
       - name: Terraform Init
         if: needs.changes.outputs.terraform == 'true'
         run: terraform init -backend=false
@@ -221,14 +222,16 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          terraform plan \
+          if terraform plan \
             -var="project_id=dummy" \
             -var="region=us-central1" \
             -no-color \
             -input=false \
-            -out=tfplan || true
-
-          terraform show -no-color tfplan > plan.txt
+            -out=tfplan; then
+            terraform show -no-color tfplan > plan.txt
+          else
+            echo "Terraform plan failed" > plan.txt
+          fi
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
