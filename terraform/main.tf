@@ -328,11 +328,10 @@ resource "google_artifact_registry_repository" "docker" {
   description   = "Docker mirror for n8n/cloudflared to bypass Docker Hub rate limits and speed up cold starts"
 }
 
-resource "google_artifact_registry_repository_iam_member" "vm_sa_puller" {
-  location   = google_artifact_registry_repository.docker.location
-  repository = google_artifact_registry_repository.docker.name
-  role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.vm_sa.email}"
+resource "google_project_iam_member" "vm_sa_ar_reader" {
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
 # checkov:skip=CKV_GCP_37: CSEK encryption is overkill for a Free Tier project; Google-managed encryption is sufficient
