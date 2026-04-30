@@ -10,6 +10,11 @@ exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 # весь bootstrap. Имена стабильные, чтобы terraform templatefile()
 # с двойным $ не поломал рендер.
 export DEBIAN_FRONTEND=noninteractive
+
+echo "=== Disable needrestart ==="
+export NEEDRESTART_MODE=a
+apt-get remove -y needrestart || true
+
 # shellcheck disable=SC2034
 APT_INSTALL_OPTS=(-y \
   -o Dpkg::Options::=--force-confold \

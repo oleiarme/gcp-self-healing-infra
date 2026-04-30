@@ -16,7 +16,7 @@ concurrency:
 jobs:
   start:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     if: >-
       github.event_name == 'workflow_dispatch' ||
       vars.VM_SCHEDULE_ENABLED != 'false'
@@ -77,7 +77,7 @@ jobs:
             --name "$MIG_NAME" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT" \
-            --timeout 900 \
+            --timeout 1800 \
             --verbose
 
       - name: Health check (n8n /healthz)
