@@ -29,7 +29,7 @@ If downtime exceeds budget → start post-mortem within 48h.
 ### Symptoms
 - MIG shows instance recreation in GCP Console → Instance Groups → n8n-mig → Events
 - Health check status: `UNHEALTHY`
-- Startup logs show `❌ CRITICAL` messages
+- Startup logs show `❌  CRITICAL` messages
 - n8n URL is unreachable for > 5 minutes
 
 ### Diagnosis
