@@ -149,12 +149,12 @@ if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
   mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DATA_DISK"
 fi
 
-mkdir -p /mnt/data
+mkdir -p /mnt/disks/data
 fsck -a "$DATA_DISK" || true
-mount -o discard,defaults "$DATA_DISK" /mnt/data
+mount -o discard,defaults "$DATA_DISK" /mnt/disks/data
 
-mkdir -p /mnt/data/postgres
-chown -R 70:70 /mnt/data/postgres
+mkdir -p /mnt/disks/data/postgres
+chown -R 70:70 /mnt/disks/data/postgres
 mkdir -p /home/docker/n8n
 
 # ==========================================
@@ -192,7 +192,7 @@ docker run -d \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:5432:5432 \
-  -v /mnt/data/postgres:/var/lib/postgresql/data \
+  -v /mnt/disks/data/postgres:/var/lib/postgresql/data \
   -e POSTGRES_DB="${db_name}" \
   -e POSTGRES_USER="${db_user}" \
   -e POSTGRES_PASSWORD="$DB_PASSWORD" \
