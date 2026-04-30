@@ -10,6 +10,11 @@ exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 # весь bootstrap. Имена стабильные, чтобы terraform templatefile()
 # с двойным $ не поломал рендер.
 export DEBIAN_FRONTEND=noninteractive
+
+echo "=== Disable needrestart ==="
+export NEEDRESTART_MODE=a
+apt-get remove -y needrestart || true
+
 # shellcheck disable=SC2034
 APT_INSTALL_OPTS=(-y \
   -o Dpkg::Options::=--force-confold \
@@ -374,15 +379,21 @@ rm -rf /var/lib/apt/lists/*
 
 
 echo "=== Pulling n8n image ==="
-retry timeout 1800 docker pull "$N8N_TARGET" || {
-  echo "❌ Docker pull failed"
+if ! retry timeout 1800 docker pull "$N8N_TARGET"; then
+  echo "❌ Docker pull failed after retries: $N8N_TARGET"
+  docker info || true
   free -m
   exit 1
-}
+fi
 
 
 echo "=== Pulling cloudflared image ==="
-retry timeout 600 docker pull "$CF_TARGET"
+if ! retry timeout 600 docker pull "$CF_TARGET"; then
+  echo "❌ Docker pull failed after retries: $CF_TARGET"
+  docker info || true
+  free -m
+  exit 1
+fi
 
 
 echo "=== Starting Containers ==="

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Wait for all instances in a GCP Managed Instance Group to reach RUNNING / NONE.
-# Usage: wait-gcp-mig.sh --name MIG_NAME --region REGION --project PROJECT [--timeout 900]
+# Usage: wait-gcp-mig.sh --name MIG_NAME --region REGION --project PROJECT [--timeout 1800]
 # Exit codes: 0=ready, 1=timeout, 2=bad args
 set -euo pipefail
 
 # Defaults
-TIMEOUT=900
+TIMEOUT=1800
 POLL_INTERVAL=30
 VERBOSE=false
 
