@@ -105,8 +105,8 @@ nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
 
 echo "=== Install Docker & Tools ==="
 echo 'DPkg::Options { "--force-confdef"; "--force-confold"; };' > /etc/apt/apt.conf.d/local
-retry apt-get update -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=0
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
+retry timeout 300 apt-get update -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=0
+retry timeout 300 apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
   -o Acquire::Retries=3 \
   ca-certificates curl gnupg docker.io cron postgresql-client
 
@@ -118,9 +118,12 @@ if ! command -v gcloud >/dev/null 2>&1; then
   gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
   (
     set +e
-    retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli
-    echo "✅ gcloud installed"
-  ) &
+    if retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli; then
+      echo "✅ gcloud installed successfully"
+    else
+      echo "⚠️ gcloud install failed (will retry check later)"
+    fi
+  )
 fi
 
 
@@ -128,9 +131,11 @@ fi
 
 
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
+(
+  curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
   -o /usr/local/lib/docker/cli-plugins/docker-compose &&
-chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+  chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+) &
 
 echo "=== Taming Docker for e2-micro ==="
 mkdir -p /etc/docker
@@ -193,6 +198,10 @@ for i in {1..30}; do
   fi
   sleep 2
 done
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "❌ gcloud not installed after wait"
+  exit 1
+fi
 
 echo "=== Checking GCP metadata (service account) ==="
 
@@ -299,10 +308,10 @@ echo "=== Resolve AR Images ==="
 # (AR repo might not exist on the very first terraform apply, or mirror
 # might have failed in CI).
 N8N_TARGET="${n8n_ar_image}"
-gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
+retry gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
 
 # fallback if AR image not yet available (race condition with CI mirror)
-if ! docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
+if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
   echo "⚠️ AR miss for n8n → fallback to public"
   N8N_TARGET="${n8n_image}"
 fi
@@ -311,7 +320,7 @@ echo "Using AR image: $N8N_TARGET"
 
 CF_TARGET="${cloudflared_ar_image}"
 # fallback if AR image not yet available (race condition with CI mirror)
-if ! docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
+if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
   echo "⚠️ AR miss for cloudflared → fallback to public"
   CF_TARGET="${cloudflared_image}"
 fi
@@ -424,9 +433,18 @@ services:
         condition: service_healthy
 EOF
 
+echo "=== Waiting for docker-compose plugin ==="
+# Wait for the background download started at the beginning of the script
+for i in {1..30}; do
+  if [ -x /usr/local/lib/docker/cli-plugins/docker-compose ]; then
+    echo "✅ docker-compose ready"
+    break
+  fi
+  echo "⏳ Waiting for docker-compose ($i/30)..."
+  sleep 2
+done
+
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
-sync
-echo 3 > /proc/sys/vm/drop_caches || true
 echo "=== Cleaning package cache before image pull ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
