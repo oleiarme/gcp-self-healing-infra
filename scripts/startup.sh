@@ -104,9 +104,11 @@ EOF
 nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
 
 echo "=== Install Docker & Tools ==="
-retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" \
-  ca-certificates curl gnupg apt-transport-https docker.io cron postgresql-client
+echo 'DPkg::Options { "--force-confdef"; "--force-confold"; };' > /etc/apt/apt.conf.d/local
+retry apt-get update -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=0
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
+  -o Acquire::Retries=3 \
+  ca-certificates curl gnupg docker.io cron postgresql-client
 
 # Only install gcloud if not already present
 if ! command -v gcloud >/dev/null 2>&1; then
@@ -114,8 +116,11 @@ if ! command -v gcloud >/dev/null 2>&1; then
   echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
   gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
-  retry apt-get update
-  retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli
+  (
+    set +e
+    retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli
+    echo "✅ gcloud installed"
+  ) &
 fi
 
 
@@ -124,7 +129,7 @@ fi
 
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 \
-  -o /usr/local/lib/docker/cli-plugins/docker-compose
+  -o /usr/local/lib/docker/cli-plugins/docker-compose &&
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 echo "=== Taming Docker for e2-micro ==="
@@ -178,6 +183,16 @@ docker info >/dev/null 2>&1 || {
   echo "❌ Docker not ready after 60s"
   exit 1
 }
+
+
+echo "=== Waiting for gcloud ==="
+for i in {1..30}; do
+  if command -v gcloud >/dev/null 2>&1; then
+    echo "✅ gcloud ready"
+    break
+  fi
+  sleep 2
+done
 
 echo "=== Checking GCP metadata (service account) ==="
 
@@ -272,43 +287,6 @@ chown -R 70:70 /mnt/data/postgres
 
 mkdir -p /opt/n8n
 
-echo "=== Install Ops Agent (logging-only, minimal receiver set) ==="
-# We deliberately ship a logging-only Ops Agent config. Host-metrics and
-# process-metrics receivers from the default config pushed e2-micro over its
-# IO budget (see commit 'del ops agent not enouth io' on main). The single
-# tail receiver below is what powers the n8n/startup_critical log-based
-# metric defined in terraform/monitoring.tf.
-mkdir -p /etc/google-cloud-ops-agent
-cat <<'EOF' > /etc/google-cloud-ops-agent/config.yaml
-logging:
-  receivers:
-    startup_log:
-      type: files
-      include_paths:
-        - /var/log/startup.log
-  service:
-    pipelines:
-      default_pipeline:
-        receivers:
-          - startup_log
-metrics:
-  service:
-    pipelines: {}
-EOF
-
-# Ops Agent install is non-fatal: the agent is an observability aid, not
-# an application dependency, and must never boot-loop the VM on transient
-# apt or network errors. `set -e` is suppressed for this block only; any
-# failure is logged as a WARNING and the rest of the script continues so
-# the n8n container still starts and the GCP health check stays green.
-{
-  retry curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh &&
-    # Сначала добавляем репозиторий БЕЗ установки (убираем --also-install)
-    retry bash add-google-cloud-ops-agent-repo.sh &&
-    # Устанавливаем принудительно, игнорируя вопросы о конфигах
-    retry apt-get install -y -o Dpkg::Options::="--force-confold" google-cloud-ops-agent &&
-    systemctl enable --now google-cloud-ops-agent
-} || echo "⚠️ WARNING: Ops Agent install failed..."
 
 
 echo "=== Pre-flight Variables Check ==="
@@ -323,10 +301,23 @@ echo "=== Resolve AR Images ==="
 N8N_TARGET="${n8n_ar_image}"
 gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
 
+# fallback if AR image not yet available (race condition with CI mirror)
+if ! docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for n8n → fallback to public"
+  N8N_TARGET="${n8n_image}"
+fi
+
 echo "Using AR image: $N8N_TARGET"
 
 CF_TARGET="${cloudflared_ar_image}"
+# fallback if AR image not yet available (race condition with CI mirror)
+if ! docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for cloudflared → fallback to public"
+  CF_TARGET="${cloudflared_image}"
+fi
+
 echo "Using AR image: $CF_TARGET"
+
 [ -z "${BACKUP_BUCKET_NAME}" ] && { echo "❌ BACKUP_BUCKET_NAME is empty"; exit 1; }
 
 echo "✅ All required variables present"
@@ -434,7 +425,8 @@ services:
 EOF
 
 docker compose config >/dev/null || { echo "❌ Invalid docker-compose.yml"; exit 1; }
-
+sync
+echo 3 > /proc/sys/vm/drop_caches || true
 echo "=== Cleaning package cache before image pull ==="
 apt-get clean
 rm -rf /var/lib/apt/lists/*
