@@ -1,19 +1,32 @@
 name: terraform-validate
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
 
 on:
   pull_request:
     branches:
-      - main
-      - 'docs/**'
-      - 'phase-**'
-    paths:
-      - 'terraform/**'
-      - 'scripts/**'
-      - 'docs/**'
-      - '.github/workflows/**'
+      - main      
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.filter.outputs.terraform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Paths filter
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            terraform:
+              - 'terraform/**'
+              - 'scripts/**'
   terraform:
+    needs: changes
     name: Validate & Lint
     runs-on: ubuntu-latest
     defaults:
@@ -21,22 +34,37 @@ jobs:
         working-directory: ./terraform
     steps:
       - uses: actions/checkout@v6
+      - name: Skip if no terraform changes
+        if: needs.changes.outputs.terraform != 'true'
+        run: echo "No terraform changes, skipping Terraform steps"
 
       - name: Setup Terraform
+        if: needs.changes.outputs.terraform == 'true'
         uses: hashicorp/setup-terraform@v4
 
-      # -backend=false — no real GCS bucket needed for validation
+      - name: Cache Terraform plugins
+        if: needs.changes.outputs.terraform == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: terraform-${{ runner.os }}
+        # -backend=false — no real GCS bucket needed for validation
       - name: Terraform Init
+        if: needs.changes.outputs.terraform == 'true'
         run: terraform init -backend=false
 
       - name: Terraform Validate
+        if: needs.changes.outputs.terraform == 'true'
         run: terraform validate
 
       # Fails if any .tf file is not formatted
       - name: Terraform Format Check
+        if: needs.changes.outputs.terraform == 'true'
         run: terraform fmt -check -recursive
 
   shellcheck:
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
     name: Shellcheck scripts
     runs-on: ubuntu-latest
     steps:
@@ -49,6 +77,8 @@ jobs:
         run: shellcheck --severity=warning --exclude=SC2154,SC2086 scripts/*.sh docs/drills/*.sh
 
   tflint:
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
     name: tflint
     runs-on: ubuntu-latest
     steps:
@@ -65,6 +95,8 @@ jobs:
         run: tflint --recursive --minimum-failure-severity=warning
 
   tfsec:
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
     name: tfsec
     runs-on: ubuntu-latest
     steps:
@@ -81,6 +113,8 @@ jobs:
           soft_fail: false
 
   checkov:
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
     name: checkov
     runs-on: ubuntu-latest
     steps:
@@ -103,6 +137,8 @@ jobs:
           skip_check: CKV_GCP_82,CKV_GCP_38,CKV_GCP_62,CKV_GCP_83,CKV_GCP_124,CKV_GCP_84,CKV_GCP_37
 
   trivy-images:
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
     name: trivy (pinned images)
     runs-on: ubuntu-latest
     # Container-image vuln scan for the digests pinned in
