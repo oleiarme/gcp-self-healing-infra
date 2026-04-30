@@ -39,15 +39,84 @@ retry() {
   return 1
 }
 
-echo "=== Install Docker ==="
+echo "=== Starting Early Health Check Server (port 8080) ==="
+# We start it as early as possible to prevent MIG autohealer from killing the VM
+# while it's still doing heavy apt-get/docker-pull operations.
+cat <<'EOF' > /opt/health_server.py
+import http.server
+import socketserver
+import subprocess
+import time
+
+START_TIME = time.time()
+BOOTSTRAP_WINDOW = 3600  # 60 minutes — give e2-micro plenty of room
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        uptime = time.time() - START_TIME
+
+        try:
+            # check n8n
+            n8n = subprocess.run(
+                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2
+            )
+
+            # check postgres
+            pg = subprocess.run(
+                ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "n8n"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2
+            )
+
+            ready = (n8n.returncode == 0 and pg.returncode == 0)
+
+        except Exception:
+            ready = False
+
+        # 🔹 Phase 1: bootstrap
+        if not ready and uptime < BOOTSTRAP_WINDOW:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
+
+        # 🔹 Phase 2: real state
+        if ready:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        else:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"FAIL")
+
+with socketserver.TCPServer(("", 8080), Handler) as httpd:
+    httpd.serve_forever()
+EOF
+
+nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
+
+echo "=== Install Docker & Tools ==="
 retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" ca-certificates curl gnupg apt-transport-https
-echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
-curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
-gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
-retry apt-get update
-retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends \
-  docker.io cron postgresql-client google-cloud-cli
+retry apt-get install "$${APT_INSTALL_OPTS[@]}" \
+  ca-certificates curl gnupg apt-transport-https docker.io cron postgresql-client
+
+# Only install gcloud if not already present
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "=== Install Google Cloud CLI ==="
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+  gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+  retry apt-get update
+  retry apt-get install "$${APT_INSTALL_OPTS[@]}" --no-install-recommends google-cloud-cli
+fi
 
 
 
@@ -518,70 +587,7 @@ docker compose up -d n8n cloudflared || {
   exit 1
 }
 
-echo "=== Starting Health Check Server (port 8080) ==="
-
-cat <<'EOF' > /opt/health_server.py
-import http.server
-import socketserver
-import subprocess
-import time
-
-START_TIME = time.time()
-BOOTSTRAP_WINDOW = 1800  # 30 minutes — matches MIG initial_delay_sec
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, format, *args):
-        pass
-
-    def do_GET(self):
-        uptime = time.time() - START_TIME
-
-        try:
-            # check n8n
-            n8n = subprocess.run(
-                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2
-            )
-
-            # check postgres
-            pg = subprocess.run(
-                ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "n8n"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2
-            )
-
-            ready = (n8n.returncode == 0 and pg.returncode == 0)
-
-        except Exception:
-            ready = False
-
-        # 🔹 Phase 1: bootstrap
-        if not ready and uptime < BOOTSTRAP_WINDOW:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"BOOTSTRAP")
-            return
-
-        # 🔹 Phase 2: real state
-        if ready:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-        else:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(b"FAIL")
-
-
-
-with socketserver.TCPServer(("", 8080), Handler) as httpd:
-    httpd.serve_forever()
-EOF
-
-nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
+echo "=== Application Readiness Status ==="
 
 echo "=== Waiting for n8n readiness ==="
 
