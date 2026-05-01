@@ -425,7 +425,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $TOKEN" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
   
-  echo "→ Backup list received (size: ${#BACKUP_INFO})"
+  echo "→ Backup list received (size: $${#BACKUP_INFO})"
   # Search for both .sql and .sql.gz backups
   LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep -E '\.(sql|sql\.gz)$' | sort | tail -n 1)
 
