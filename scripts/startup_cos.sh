@@ -379,7 +379,14 @@ fi
 # ==========================================
 # 9. Backup Restore (DR only)
 # ==========================================
-echo "=== Backup Restore (DR only) ==="
+# FAST SKIP: if DB already initialized → skip restore
+DB_READY=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT 1;" 2>/dev/null | xargs || echo "")
+if [ "$DB_READY" = "1" ]; then
+  echo "✅ DB already ready → skipping restore"
+  SKIP_RESTORE=true
+fi
+
+echo "→ Checking if restore is needed"
 SKIP_RESTORE=false
 DB_EXISTS=$(docker exec postgres psql -U "${db_user}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" | xargs)
 if [ "$DB_EXISTS" = "1" ]; then
@@ -400,24 +407,26 @@ if [ "$DB_EXISTS" = "1" ]; then
 fi
 
 if [ "$SKIP_RESTORE" != "true" ]; then
-  echo "Fetching latest backup info via REST API..."
+  echo "→ Requesting backup list from GCS..."
   # Refresh token before GCS operations (may have expired during long startup)
   TOKEN=$(get_token)
-  BACKUP_INFO=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+  BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $TOKEN" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
-
+  
+  echo "→ Backup list received (size: ${#BACKUP_INFO})"
   # Search for both .sql and .sql.gz backups
   LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep -E '\.(sql|sql\.gz)$' | sort | tail -n 1)
 
+  echo "→ Found latest backup: $LATEST_OBJ"
   if [ -n "$LATEST_OBJ" ]; then
-    echo "Restoring from $LATEST_OBJ"
+    echo "→ Restoring from $LATEST_OBJ"
     OBJ_ENC=$(echo "$LATEST_OBJ" | sed 's/\//%2F/g')
     # Download backup — detect extension for gzip support
     DOWNLOAD_FILE="/home/docker/backup.sql"
     if echo "$LATEST_OBJ" | grep -q '\.gz$'; then
       DOWNLOAD_FILE="/home/docker/backup.sql.gz"
     fi
-    curl -sf -H "Authorization: Bearer $TOKEN" \
+    timeout 120 curl -sf -H "Authorization: Bearer $TOKEN" \
          "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${OBJ_ENC}?alt=media" > "$DOWNLOAD_FILE"
 
     if [ -s /home/docker/backup.sql ] || [ -s /home/docker/backup.sql.gz ]; then
