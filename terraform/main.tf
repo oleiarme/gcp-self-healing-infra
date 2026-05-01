@@ -13,6 +13,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 6.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.5"
+    }
     archive = {
       source  = "hashicorp/archive"
       version = "~> 2.7"
@@ -26,6 +30,10 @@ provider "google" {
   zone    = var.zone
 }
 
+
+resource "random_id" "bucket_suffix" {
+  byte_length = 2
+}
 
 resource "google_project_service" "required" {
   for_each = toset([
@@ -62,7 +70,7 @@ resource "google_service_account" "vm_sa" {
   # n8n on the next restart. Force a deliberate two-step destroy if we
   # ever genuinely need to remove it.
   lifecycle {
-    #prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
@@ -131,7 +139,7 @@ locals {
     n8n_ar_image          = local.n8n_ar_image
     cloudflared_ar_image  = local.cf_ar_image
     ar_location           = var.region
-    BACKUP_BUCKET_NAME    = var.backup_bucket_name
+    BACKUP_BUCKET_NAME    = google_storage_bucket.backup.name
     n8n_public_host       = var.n8n_public_host
   })
 
@@ -271,7 +279,7 @@ resource "google_secret_manager_secret_iam_member" "cf_token_access" {
 #   terraform import google_storage_bucket.backup <bucket-name>
 
 resource "google_storage_bucket" "backup" {
-  name                        = var.backup_bucket_name
+  name                        = "${var.project_id}-backup-${random_id.bucket_suffix.hex}"
   location                    = "US-CENTRAL1"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
