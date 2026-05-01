@@ -173,9 +173,6 @@ with ThreadingTCPServer(("", 8080), Handler) as httpd:
     httpd.serve_forever()
 EOF
 
-
-docker rm -f health-server 2>/dev/null || true
-
 docker run -d --name health-server --restart always --network host \
   -v /tmp/health_server.py:/health_server.py:ro \
   mirror.gcr.io/python:3-alpine python3 /health_server.py
@@ -299,13 +296,10 @@ echo "=== Pulling Images ==="
 N8N_TARGET="${n8n_ar_image}"
 CF_TARGET="${cloudflared_ar_image}"
 
-echo "=== Docker login to Artifact Registry ==="
-TOKEN=$(get_token)
-
-echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin \
-https://${ar_location}-docker.pkg.dev || {
-  echo "⚠️ AR login failed"
-}
+# Authenticate Docker to Artifact Registry
+if ! echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin https://${ar_location}-docker.pkg.dev 2>/dev/null; then
+  echo "⚠️ AR login failed, fallback to public images expected"
+fi
 
 retry docker pull "$N8N_TARGET" || {
   echo "⚠️ AR miss for n8n → fallback to public"
@@ -340,7 +334,6 @@ for f in db_password n8n_key cf_token; do
   fi
 done
 
-docker rm -f postgres 2>/dev/null || true 
 echo "=== Ensure Docker network ==="
 docker network inspect n8n-net >/dev/null 2>&1 || docker network create n8n-net
 
@@ -516,9 +509,6 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   fi
 fi
 
-
-docker rm -f n8n 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || docker network create n8n-net
 # ==========================================
 # 10. Start n8n
 # ==========================================
@@ -574,10 +564,6 @@ if [ "$N8N_READY" != "true" ]; then
   echo "❌ n8n failed to become ready"
   docker logs n8n --tail=50 || true
 fi
-
-
-docker rm -f cloudflared 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || docker network create n8n-net
 
 echo "=== Starting cloudflared ==="
 docker run -d \
