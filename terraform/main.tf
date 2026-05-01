@@ -62,7 +62,7 @@ resource "google_service_account" "vm_sa" {
   # n8n on the next restart. Force a deliberate two-step destroy if we
   # ever genuinely need to remove it.
   lifecycle {
-    prevent_destroy = true
+    #prevent_destroy = true
   }
 }
 
