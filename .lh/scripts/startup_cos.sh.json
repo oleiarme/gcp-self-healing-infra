@@ -3,11 +3,15 @@
     "activeCommit": 0,
     "commits": [
         {
-            "activePatchIndex": 0,
+            "activePatchIndex": 1,
             "patches": [
                 {
                     "date": 1777632086666,
                     "content": "Index: \n===================================================================\n--- \n+++ \n"
+                },
+                {
+                    "date": 1777652404288,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n@@ -173,8 +173,15 @@\n docker run -d --name health-server --restart always --network host \\\n   -v /tmp/health_server.py:/health_server.py:ro \\\n   python:3-alpine python3 /health_server.py\n \n+sleep 2\n+docker ps | grep health-server || {\n+  echo \"❌ health-server failed to start\"\n+  docker logs health-server || true\n+  exit 1\n+}\n+\n # ==========================================\n # 4. Wait for GCP metadata\n # ==========================================\n echo \"=== Fetching Metadata Token ===\"\n@@ -312,8 +319,9 @@\n umask 077\n mkdir -p /dev/shm/n8n-secrets\n printf \"%s\" \"$DB_PASSWORD\" > /dev/shm/n8n-secrets/db_password\n printf \"%s\" \"$N8N_KEY\" > /dev/shm/n8n-secrets/n8n_key\n+printf \"%s\" \"$CF_TOKEN\" > /dev/shm/n8n-secrets/cf_token\n umask 022\n \n echo \"=== Verify Secrets Before Start ===\"\n for f in db_password n8n_key cf_token; do\n"
                 }
             ],
             "date": 1777632086666,
