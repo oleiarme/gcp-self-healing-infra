@@ -4,7 +4,8 @@ terraform {
   # Backend настраивается через -backend-config=backend.conf
   # Placeholder bucket — перезаписывается -backend-config="bucket=..." в CI
   backend "gcs" {
-    bucket = "tf-state-placeholder"
+    bucket  = "idealist-426118-tf-state"
+    prefix  = "n8n"
   }
 
   required_providers {
@@ -237,11 +238,7 @@ resource "google_secret_manager_secret_iam_member" "n8n_key_access" {
   member    = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "cf_token_access" {
-  secret_id = google_secret_manager_secret.cf_token.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.vm_sa.email}"
-}
+
 
 # 1.3 Cloudflare Tunnel Token
 resource "google_secret_manager_secret" "cf_token" {
