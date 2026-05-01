@@ -295,26 +295,38 @@ fi
 echo "=== Pre-clean Docker ==="
 docker system prune -af --volumes || true
 
-echo "=== Preload Docker Images from GCS ==="
+echo "=== Pull Docker images ==="
+pull_with_fallback() {
+  local name="$1"
+  local primary="$2"
+  local fallback="$3"
+  local selected="$primary"
 
-IMAGE_BUCKET="gs://n8n-images-cache-idealist426118/images"
-mkdir -p /tmp/images
+  echo "→ Pulling $name from Artifact Registry: $primary" >&2
+  if ! docker pull "$primary" >&2; then
+    echo "⚠️ $name Artifact Registry pull failed, falling back to public image" >&2
+    selected="$fallback"
+    docker pull "$selected" >&2
+  fi
 
-echo "→ Download images"
-gsutil -m cp "$IMAGE_BUCKET/n8n.tar" /tmp/images/n8n.tar || exit 1
-gsutil -m cp "$IMAGE_BUCKET/cloudflared.tar" /tmp/images/cloudflared.tar || exit 1
-gsutil -m cp "$IMAGE_BUCKET/postgres.tar" /tmp/images/postgres.tar || exit 1
+  printf "%s" "$selected"
+}
 
-echo "→ Load images into Docker"
-docker load < /tmp/images/n8n.tar || exit 1
-docker load < /tmp/images/cloudflared.tar || exit 1
-docker load < /tmp/images/postgres.tar || exit 1
+N8N_TARGET=$(pull_with_fallback "n8n" "${n8n_ar_image}" "${n8n_image}")
+CF_TARGET=$(pull_with_fallback "cloudflared" "${cloudflared_ar_image}" "${cloudflared_image}")
+POSTGRES_IMAGE="postgres:15-alpine"
+docker pull "$POSTGRES_IMAGE"
 
-echo "✅ Images preloaded"
-
-# Fix image names (важно!)
-N8N_TARGET="docker.n8n.io/n8nio/n8n@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af"
-CF_TARGET="docker.io/cloudflare/cloudflared@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
+cat <<EOF > /home/docker/runtime.env
+N8N_TARGET=$N8N_TARGET
+CF_TARGET=$CF_TARGET
+POSTGRES_IMAGE=$POSTGRES_IMAGE
+DB_NAME=${db_name}
+DB_USER=${db_user}
+DB_PORT=${db_port}
+N8N_PUBLIC_HOST=${n8n_public_host}
+EOF
+chmod 600 /home/docker/runtime.env
 
 # ==========================================
 # 8. Start Postgres
@@ -354,7 +366,7 @@ docker run -d \
   --health-interval=5s \
   --health-timeout=3s \
   --health-retries=5 \
-  postgres:15-alpine
+  "$POSTGRES_IMAGE"
 
 echo "=== Waiting for Postgres ==="
 READY=false
@@ -379,15 +391,15 @@ fi
 # ==========================================
 # 9. Backup Restore (DR only)
 # ==========================================
-# FAST SKIP: if DB already initialized → skip restore
-DB_READY=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT 1;" 2>/dev/null | xargs || echo "")
-if [ "$DB_READY" = "1" ]; then
-  echo "✅ DB already ready → skipping restore"
+# FAST SKIP: if n8n already initialized the DB, skip restore
+SKIP_RESTORE=false
+MIGRATIONS_READY=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs || echo "")
+if [ -n "$MIGRATIONS_READY" ] && [ "$MIGRATIONS_READY" -gt 0 ]; then
+  echo "✅ DB already initialized ($MIGRATIONS_READY migrations) → skipping restore"
   SKIP_RESTORE=true
 fi
 
 echo "→ Checking if restore is needed"
-SKIP_RESTORE=false
 DB_EXISTS=$(docker exec postgres psql -U "${db_user}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" | xargs)
 if [ "$DB_EXISTS" = "1" ]; then
   # Use migrations table as the source of truth — it's populated by n8n on
@@ -515,8 +527,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       exit 1
     fi
   else
-    echo "❌ CRITICAL: No backups found in ${BACKUP_BUCKET_NAME}"
-    exit 1
+    echo "⚠️ No backups found in ${BACKUP_BUCKET_NAME}; continuing with empty database"
   fi
 fi
 
@@ -549,9 +560,9 @@ docker run -d \
   -e EXECUTIONS_DATA_MAX_AGE_HISTORY=24 \
   -e N8N_RUNNERS_ENABLED=true \
   -e N8N_RUNNERS_MODE=internal \
-  -e N8N_HOST=n8n-gcp.pp.ua \
+  -e N8N_HOST="${n8n_public_host}" \
   -e N8N_PROTOCOL=https \
-  -e WEBHOOK_URL=https://n8n-gcp.pp.ua/ \
+  -e WEBHOOK_URL="https://${n8n_public_host}/" \
   -e N8N_DIAGNOSTICS_ENABLED=false \
   -e N8N_METRICS_ENABLED=false \
   -e N8N_PORT=5678 \

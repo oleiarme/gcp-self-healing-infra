@@ -221,10 +221,22 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: dummy-token-for-static-plan
         run: |
           if terraform plan \
             -var="project_id=dummy" \
             -var="region=us-central1" \
+            -var="db_host=127.0.0.1" \
+            -var="db_user=n8n" \
+            -var="db_password=dummy-password" \
+            -var="n8n_encryption_key=dummy-encryption-key-with-32-chars" \
+            -var="CF_TUNNEL_TOKEN=dummy-cloudflare-token" \
+            -var="n8n_public_host=n8n.example.com" \
+            -var="oncall_email=oncall@example.com" \
+            -var="backup_bucket_name=dummy-n8n-backups" \
+            -var="wif_allowed_repository=owner/repo" \
+            -var="github_repository_url=https://github.com/owner/repo" \
             -no-color \
             -input=false \
             -out=tfplan; then

@@ -1,7 +1,7 @@
 name: App Deploy (In-Place)
 # Shearing Layers: infrastructure changes rarely, application changes often.
 # This workflow updates Docker containers on the running VM via SSH (IAP),
-# without recreating the VM. Downtime: 2-5 seconds (docker compose restart)
+# without recreating the VM. Downtime: roughly one container restart
 # vs 1-3 minutes (MIG RECREATE).
 #
 # Use this for: n8n version bumps, cloudflared updates, config changes.
@@ -50,6 +50,8 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
       # Mirror images to AR (same logic as deploy.yml, reused for consistency)
       - name: Mirror images to Artifact Registry
         if: ${{ !inputs.skip_mirror }}
@@ -75,21 +77,26 @@ jobs:
             docker tag  "${SRC}" "${DST}"
             docker push "${DST}"
           done
-      # Find the VM instance managed by the MIG
       - name: Resolve VM instance
         id: vm
         run: |
           set -eo pipefail
-          # List instances in the regional MIG
-          INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig \
+          INSTANCE_URL=$(gcloud compute instance-groups managed list-instances n8n-mig \
             --region="${REGION}" --project="${PROJECT}" \
-            --format="value(instance.basename())" | head -1)
+            --format="value(instance)" | head -1)
+          INSTANCE="${INSTANCE_URL##*/}"
+          ZONE_FROM_URL=$(echo "$INSTANCE_URL" | sed -n 's#.*/zones/\([^/]*\)/instances/.*#\1#p')
           if [ -z "$INSTANCE" ]; then
             echo "::error::No running instance found in MIG n8n-mig"
             exit 1
           fi
+          if [ -z "$ZONE_FROM_URL" ]; then
+            echo "::error::Could not parse zone from instance URL: $INSTANCE_URL"
+            exit 1
+          fi
           echo "instance=${INSTANCE}" >> "$GITHUB_OUTPUT"
-          echo "::notice::Target VM: ${INSTANCE} in ${ZONE}"
+          echo "zone=${ZONE_FROM_URL}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Target VM: ${INSTANCE} in ${ZONE_FROM_URL}"
       # SSH into the VM and do in-place container update
       - name: Deploy via SSH (IAP)
         run: |
@@ -101,57 +108,106 @@ jobs:
           AR_N8N="${AR}/n8n:${N8N_TAG}-${N8N_DS}"
           AR_CF="${AR}/cloudflared:${CF_TAG}-${CF_DS}"
           gcloud compute ssh "${{ steps.vm.outputs.instance }}" \
-            --zone="${ZONE}" \
+            --zone="${{ steps.vm.outputs.zone }}" \
             --project="${PROJECT}" \
             --tunnel-through-iap \
-            --command="
+            --command="sudo env N8N_PRIMARY='${AR_N8N}' N8N_FALLBACK='${N8N_IMAGE}' CF_PRIMARY='${AR_CF}' CF_FALLBACK='${CF_IMAGE}' bash -s" <<'REMOTE'
               set -eo pipefail
-              cd /opt/n8n
               echo '=== In-Place Deploy ==='
-              # Try AR image first, fall back to public
-              N8N_TARGET='${AR_N8N}'
-              if ! docker image inspect \"\$N8N_TARGET\" >/dev/null 2>&1; then
-                if ! docker pull \"\$N8N_TARGET\" 2>/dev/null; then
-                  echo 'AR miss for n8n, using public image'
-                  N8N_TARGET='${N8N_IMAGE}'
-                  docker pull \"\$N8N_TARGET\"
-                fi
-              else
-                echo 'n8n image already cached'
+
+              if [ ! -f /home/docker/runtime.env ]; then
+                echo 'Missing /home/docker/runtime.env. Recreate the VM with the current startup_cos.sh first.'
+                exit 1
               fi
-              CF_TARGET='${AR_CF}'
-              if ! docker image inspect \"\$CF_TARGET\" >/dev/null 2>&1; then
-                if ! docker pull \"\$CF_TARGET\" 2>/dev/null; then
-                  echo 'AR miss for cloudflared, using public image'
-                  CF_TARGET='${CF_IMAGE}'
-                  docker pull \"\$CF_TARGET\"
+              # shellcheck disable=SC1091
+              . /home/docker/runtime.env
+
+              pull_with_fallback() {
+                local name="$1"
+                local primary="$2"
+                local fallback="$3"
+                local selected="$primary"
+                if ! docker pull "$primary" >&2; then
+                  echo "AR miss for $name, using public image" >&2
+                  selected="$fallback"
+                  docker pull "$selected" >&2
                 fi
-              else
-                echo 'cloudflared image already cached'
-              fi
-              # Update .env with new image refs (preserving secrets)
-              sed -i \"s|^N8N_IMAGE=.*|N8N_IMAGE=\${N8N_TARGET}|\" .env
-              sed -i \"s|^CLOUDFLARED_IMAGE=.*|CLOUDFLARED_IMAGE=\${CF_TARGET}|\" .env
-              # Restart containers with new images (2-5 sec downtime)
-              docker compose up -d --no-deps n8n
-              docker compose up -d --no-deps cloudflared
+                printf "%s" "$selected"
+              }
+
+              N8N_TARGET=$(pull_with_fallback n8n "$N8N_PRIMARY" "$N8N_FALLBACK")
+              CF_TARGET=$(pull_with_fallback cloudflared "$CF_PRIMARY" "$CF_FALLBACK")
+
+              sed -i "s|^N8N_TARGET=.*|N8N_TARGET=${N8N_TARGET}|" /home/docker/runtime.env
+              sed -i "s|^CF_TARGET=.*|CF_TARGET=${CF_TARGET}|" /home/docker/runtime.env
+
+              docker rm -f n8n 2>/dev/null || true
+              docker run -d \
+                --name n8n \
+                --network n8n-net \
+                --restart unless-stopped \
+                -p 127.0.0.1:5678:5678 \
+                -v /dev/shm/n8n-secrets:/run/secrets:ro \
+                -e DB_TYPE=postgresdb \
+                -e DB_POSTGRESDB_HOST=postgres \
+                -e DB_POSTGRESDB_PORT="${DB_PORT}" \
+                -e DB_POSTGRESDB_DATABASE="${DB_NAME}" \
+                -e DB_POSTGRESDB_USER="${DB_USER}" \
+                -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+                -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
+                -e N8N_EXECUTIONS_MODE=regular \
+                -e N8N_CONCURRENCY_PRODUCTION_LIMIT=1 \
+                -e N8N_LOG_LEVEL=warn \
+                -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+                -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
+                -e EXECUTIONS_DATA_PRUNE=true \
+                -e EXECUTIONS_DATA_MAX_AGE_HISTORY=24 \
+                -e N8N_RUNNERS_ENABLED=true \
+                -e N8N_RUNNERS_MODE=internal \
+                -e N8N_HOST="${N8N_PUBLIC_HOST}" \
+                -e N8N_PROTOCOL=https \
+                -e WEBHOOK_URL="https://${N8N_PUBLIC_HOST}/" \
+                -e N8N_DIAGNOSTICS_ENABLED=false \
+                -e N8N_METRICS_ENABLED=false \
+                -e N8N_PORT=5678 \
+                -e N8N_LISTEN_ADDRESS=0.0.0.0 \
+                -e DB_POSTGRESDB_CONNECTION_TIMEOUT=60000 \
+                "$N8N_TARGET"
+
+              for i in {1..30}; do
+                if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+                  echo 'n8n is healthy'
+                  break
+                fi
+                sleep 2
+              done
+
+              docker rm -f cloudflared 2>/dev/null || true
+              docker run -d \
+                --name cloudflared \
+                --network n8n-net \
+                --restart unless-stopped \
+                -p 127.0.0.1:2000:2000 \
+                -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
+                "$CF_TARGET" \
+                tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
+
               echo '=== Deploy complete ==='
-              docker compose ps
-            "
+              docker ps --filter name=n8n --filter name=cloudflared
+          REMOTE
       # Quick health check after deploy
       - name: Verify deployment
         run: |
           echo "Waiting 30s for containers to stabilize..."
           sleep 30
           gcloud compute ssh "${{ steps.vm.outputs.instance }}" \
-            --zone="${ZONE}" \
+            --zone="${{ steps.vm.outputs.zone }}" \
             --project="${PROJECT}" \
             --tunnel-through-iap \
             --command="
-              cd /opt/n8n
               echo '=== Health Check ==='
-              docker compose ps
+              sudo docker ps --filter name=n8n --filter name=cloudflared
               echo ''
               echo '=== n8n logs (last 10 lines) ==='
-              docker compose logs --tail=10 n8n
+              sudo docker logs --tail=10 n8n
             "
