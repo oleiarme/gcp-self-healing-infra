@@ -532,7 +532,7 @@ rm -rf /var/lib/apt/lists/*
 
 
 # Disk pressure check before image pull — prevents docker daemon crash on full disk
-AVAIL_KB=$(df --output=avail / | tail -1 | xargs)
+AVAIL_KB=$(df --output=avail /mnt/stateful_partition | tail -1 | xargs)
 if [ "$AVAIL_KB" -lt 2097152 ]; then
   echo "❌ Low disk space ($${AVAIL_KB}KB free, need 2GB) — aborting before pull"
   exit 1
