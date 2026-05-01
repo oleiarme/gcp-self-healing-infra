@@ -393,10 +393,38 @@ fi
 # ==========================================
 # FAST SKIP: if n8n already initialized the DB, skip restore
 SKIP_RESTORE=false
-MIGRATIONS_READY=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs || echo "")
-if [ -n "$MIGRATIONS_READY" ] && [ "$MIGRATIONS_READY" -gt 0 ]; then
-  echo "✅ DB already initialized ($MIGRATIONS_READY migrations) → skipping restore"
-  SKIP_RESTORE=true
+
+echo "→ Safe DB existence check"
+
+DB_EXISTS=$(timeout 5s docker exec postgres psql \
+  -U "${db_user}" \
+  -d postgres \
+  -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
+  2>/dev/null | xargs || echo "")
+
+if [ "$DB_EXISTS" != "1" ]; then
+  echo "⚠️ DB does not exist yet → restore required"
+else
+  echo "→ Checking migrations safely"
+
+  MIGRATIONS_READY=$(timeout 5s docker exec postgres psql \
+    -U "${db_user}" \
+    -d "${db_name}" \
+    -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='migrations';" \
+    2>/dev/null | xargs || echo "")
+
+  if [ "$MIGRATIONS_READY" -ge 1 ] 2>/dev/null; then
+    COUNT=$(timeout 5s docker exec postgres psql \
+      -U "${db_user}" \
+      -d "${db_name}" \
+      -tAc "SELECT COUNT(*) FROM migrations;" \
+      2>/dev/null | xargs || echo "")
+
+    if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ] 2>/dev/null; then
+      echo "✅ DB already initialized ($COUNT migrations)"
+      SKIP_RESTORE=true
+    fi
+  fi
 fi
 
 echo "→ Checking if restore is needed"
