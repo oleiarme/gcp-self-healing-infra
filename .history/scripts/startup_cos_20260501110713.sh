@@ -251,36 +251,12 @@ mkdir -p /home/docker/n8n
 # ==========================================
 docker network create n8n-net || true
 
-# === Disk check (COS-aware) ===
-
-# Try to get Docker root
-DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
-
-# Fallback если docker ещё не стартовал
-if [ -z "$DOCKER_ROOT" ]; then
-  DOCKER_ROOT="/mnt/stateful_partition"
-  echo "⚠️ Docker not ready, fallback to $DOCKER_ROOT"
-fi
-
-echo "Disk check path: $DOCKER_ROOT"
-df -h "$DOCKER_ROOT"
-
-AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
-
+# Disk pressure check before image pull
+AVAIL_KB=$(df --output=avail / | tail -1 | xargs)
 if [ "$AVAIL_KB" -lt 2097152 ]; then
-  echo "⚠️ Low disk space on $DOCKER_ROOT ($((AVAIL_KB/1024))MB free). Cleaning..."
-  docker system prune -af --volumes || true
-
-  AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
-fi
-
-if [ "$AVAIL_KB" -lt 1048576 ]; then
-  echo "❌ CRITICAL: Still low disk space ($((AVAIL_KB/1024))MB)"
+  echo "❌ Low disk space ($${AVAIL_KB}KB free, need 2GB) — aborting before pull"
   exit 1
 fi
-
-echo "=== Pre-clean Docker ==="
-docker system prune -af --volumes || true
 
 echo "=== Pulling Images ==="
 N8N_TARGET="${n8n_ar_image}"
