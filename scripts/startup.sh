@@ -532,9 +532,22 @@ rm -rf /var/lib/apt/lists/*
 
 
 # Disk pressure check before image pull — prevents docker daemon crash on full disk
-AVAIL_KB=$(df --output=avail /mnt/stateful_partition | tail -1 | xargs)
+echo "=== Disk pressure check ==="
+
+# Try to get Docker root safely
+DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
+echo "Disk check path: $DOCKER_ROOT"
+df -h "$DOCKER_ROOT"
+# Fallback for COS if docker not ready
+if [ -z "$DOCKER_ROOT" ]; then
+  DOCKER_ROOT="/mnt/stateful_partition"
+  echo "⚠️ Docker not ready, fallback to $DOCKER_ROOT"
+fi
+
+AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
+
 if [ "$AVAIL_KB" -lt 2097152 ]; then
-  echo "❌ Low disk space ($${AVAIL_KB}KB free, need 2GB) — aborting before pull"
+  echo "❌ Low disk space on $DOCKER_ROOT ($${AVAIL_KB}KB free, need 2GB)"
   exit 1
 fi
 
