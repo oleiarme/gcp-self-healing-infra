@@ -13,7 +13,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "=== Disable needrestart ==="
 export NEEDRESTART_MODE=a
-apt-get remove -y needrestart || true
+apt-get purge -y needrestart || true
 
 # shellcheck disable=SC2034
 APT_INSTALL_OPTS=(-y \
@@ -47,9 +47,42 @@ import http.server
 import socketserver
 import subprocess
 import time
+import os
 
 START_TIME = time.time()
-BOOTSTRAP_WINDOW = 3600  # 60 minutes — give e2-micro plenty of room
+BOOTSTRAP_WINDOW = 1200  # 20 minutes — covers docker install (~12 min) + margin
+STALL_TIMEOUT = 300       # 5 minutes — if no progress after bootstrap window, report STALLED
+MAX_BOOT_TIME = 1800      # 30 minutes — absolute cap; prevents eternal bootstrap
+LAST_PROGRESS_FILE = '/tmp/health_progress'
+
+def touch_progress():
+    with open(LAST_PROGRESS_FILE, 'w') as f:
+        f.write(str(time.time()))
+
+def get_last_progress():
+    try:
+        with open(LAST_PROGRESS_FILE) as f:
+            return float(f.read().strip())
+    except Exception:
+        return START_TIME
+
+import socket
+import urllib.request
+
+def check_port(port):
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=1)
+        s.close()
+        return True
+    except:
+        return False
+
+def check_http(url):
+    try:
+        urllib.request.urlopen(url, timeout=2)
+        return True
+    except:
+        return False
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -59,49 +92,76 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         uptime = time.time() - START_TIME
 
         try:
-            # check n8n
-            n8n = subprocess.run(
-                ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2
-            )
+            # check n8n via HTTP to ensure it's actually ready, postgres via TCP
+            n8n_ok = check_http("http://127.0.0.1:5678/healthz")
+            pg_ok = check_port(5432)
 
-            # check postgres
-            pg = subprocess.run(
-                ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "n8n"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2
-            )
+            ready = (n8n_ok and pg_ok)
 
-            ready = (n8n.returncode == 0 and pg.returncode == 0)
+            # Track progress — any partial readiness counts
+            if n8n_ok or pg_ok:
+                touch_progress()
 
         except Exception:
             ready = False
 
-        # 🔹 Phase 1: bootstrap
+        # Hard cap — never stay in bootstrap forever
+        if not ready and uptime > MAX_BOOT_TIME:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"HARD_FAIL")
+            return
+
+        # Phase 1: bootstrap — return 200 during initial window
         if not ready and uptime < BOOTSTRAP_WINDOW:
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"BOOTSTRAP")
             return
 
-        # 🔹 Phase 2: real state
-        if ready:
+        # Phase 2: stall detection — if past bootstrap window and no recent progress
+        if not ready:
+            since_progress = time.time() - get_last_progress()
+            if since_progress > STALL_TIMEOUT:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"STALLED")
+                return
+            # Still some recent progress, give more time
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"OK")
-        else:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(b"FAIL")
+            self.wfile.write(b"BOOTSTRAP")
+            return
 
-with socketserver.TCPServer(("", 8080), Handler) as httpd:
+        # Phase 3: fully ready
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+with ThreadingTCPServer(("", 8080), Handler) as httpd:
     httpd.serve_forever()
 EOF
 
-nohup python3 /opt/health_server.py >/var/log/health.log 2>&1 &
+cat <<'SVCEOF' > /etc/systemd/system/health-server.service
+[Unit]
+Description=Early Health Check Server
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/health_server.py
+Restart=always
+StandardOutput=append:/var/log/health.log
+StandardError=append:/var/log/health.log
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable --now health-server.service
 
 echo "=== Install Docker & Tools ==="
 echo 'DPkg::Options { "--force-confdef"; "--force-confold"; };' > /etc/apt/apt.conf.d/local
@@ -256,6 +316,11 @@ CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SEC
   exit 1
 }
 
+# Guard against truncated secrets (network flap during fetch)
+if [ -z "$DB_PASSWORD" ] || [ -z "$N8N_KEY" ] || [ -z "$CF_TOKEN" ]; then
+  echo "❌ One or more secrets are empty (possible truncated fetch)"
+  exit 1
+fi
 echo "✅ All secrets fetched successfully."
 
 echo "=== Mount Persistent Data Disk ==="
@@ -308,7 +373,9 @@ echo "=== Resolve AR Images ==="
 # (AR repo might not exist on the very first terraform apply, or mirror
 # might have failed in CI).
 N8N_TARGET="${n8n_ar_image}"
-retry gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
+if ! gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://${ar_location}-docker.pkg.dev 2>/dev/null; then
+  echo "⚠️ AR login failed, fallback to public images expected"
+fi
 
 # fallback if AR image not yet available (race condition with CI mirror)
 if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
@@ -331,17 +398,13 @@ echo "Using AR image: $CF_TARGET"
 
 echo "✅ All required variables present"
 
-# Write .env AFTER AR image resolution so $N8N_TARGET and $CF_TARGET are set
-echo "=== Setup Environment ==="
-cat <<EOF > /opt/n8n/.env
-CF_TOKEN=$CF_TOKEN
-N8N_KEY=$N8N_KEY
-DB_PASSWORD=$DB_PASSWORD
-N8N_IMAGE=$N8N_TARGET
-CLOUDFLARED_IMAGE=$CF_TARGET
-N8N_RUNNERS_ENABLED=false
-EOF
-chmod 600 /opt/n8n/.env
+# Write secrets to tmpfs (not written to disk) for Docker _FILE support
+umask 077
+mkdir -p /dev/shm/n8n-secrets
+printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
+printf "%s" "$N8N_KEY" > /dev/shm/n8n-secrets/n8n_key
+printf "%s" "$CF_TOKEN" > /dev/shm/n8n-secrets/cf_token
+umask 022
 
 echo "=== Setup n8n + Cloudflare Tunnel ==="
 cd /opt/n8n
@@ -356,7 +419,7 @@ services:
     environment:
       POSTGRES_DB: n8n
       POSTGRES_USER: n8n
-      POSTGRES_PASSWORD: $${DB_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
       interval: 5s
@@ -364,6 +427,7 @@ services:
       retries: 5
     volumes:
       - /mnt/data/postgres:/var/lib/postgresql/data
+      - /dev/shm/n8n-secrets/db_password:/run/secrets/db_password:ro
   n8n:
     image: $${N8N_IMAGE}
     restart: unless-stopped
@@ -375,9 +439,9 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
+      DB_POSTGRESDB_PASSWORD_FILE: /run/secrets/db_password
 
-      N8N_ENCRYPTION_KEY: $${N8N_KEY}
+      N8N_ENCRYPTION_KEY_FILE: /run/secrets/n8n_key
 
       N8N_EXECUTIONS_MODE: regular
       
@@ -400,6 +464,8 @@ services:
       N8N_PORT: 5678
       N8N_LISTEN_ADDRESS: 0.0.0.0
       DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
+    volumes:
+      - /dev/shm/n8n-secrets:/run/secrets:ro
     logging:
       driver: "json-file"
       options:
@@ -424,15 +490,22 @@ services:
   cloudflared:
     image: $${CLOUDFLARED_IMAGE}
     restart: unless-stopped
-    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
+    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
     ports:
       - "127.0.0.1:2000:2000"
-    env_file:
-      - .env
+    volumes:
+      - /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro
     depends_on:
       n8n:
         condition: service_healthy
 EOF
+
+# .env only for image names and non-secret config
+cat <<EOF > /opt/n8n/.env
+N8N_IMAGE=$N8N_TARGET
+CLOUDFLARED_IMAGE=$CF_TARGET
+EOF
+chmod 600 /opt/n8n/.env
 
 echo "=== Waiting for docker-compose plugin ==="
 # Wait for the background download started at the beginning of the script
@@ -458,6 +531,12 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 
 
+# Disk pressure check before image pull — prevents docker daemon crash on full disk
+AVAIL_KB=$(df --output=avail / | tail -1 | xargs)
+if [ "$AVAIL_KB" -lt 2097152 ]; then
+  echo "❌ Low disk space ($${AVAIL_KB}KB free, need 2GB) — aborting before pull"
+  exit 1
+fi
 
 echo "=== Pulling n8n image ==="
 if ! retry timeout 1800 docker pull "$N8N_TARGET"; then
@@ -478,6 +557,14 @@ fi
 
 
 echo "=== Starting Containers ==="
+echo "=== Verify Secrets Before Start ==="
+for f in db_password n8n_key cf_token; do
+  if [ ! -s "/dev/shm/n8n-secrets/$f" ]; then
+    echo "❌ Missing secret: $f (secret fetch may have partially failed)"
+    exit 1
+  fi
+done
+
 echo "=== Starting Postgres ONLY (Phase 1) ==="
 # Поднимаем ТОЛЬКО базу, чтобы n8n не успел к ней подключиться
 docker compose up -d postgres || {
@@ -485,6 +572,15 @@ docker compose up -d postgres || {
   docker compose logs postgres --tail=50
   exit 1
 }
+
+echo "=== Waiting for Postgres container to be 'Up' ==="
+for i in {1..15}; do
+  if docker compose ps postgres | grep -q "Up"; then
+    echo "✅ Postgres container is up"
+    break
+  fi
+  sleep 1
+done
 
 echo "=== Waiting for Postgres (strict) ==="
 READY=false
@@ -521,17 +617,22 @@ DB_EXISTS=$(docker compose exec -T postgres psql -U n8n -d postgres -tAc \
 "SELECT 1 FROM pg_database WHERE datname='n8n';" | xargs)
 
 if [ "$DB_EXISTS" = "1" ]; then
-  TABLE_EXISTS=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
-  "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
+  # Use migrations table as the source of truth — it's populated by n8n on
+  # every successful boot regardless of whether the user created workflows.
+  MIGRATION_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+  "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs)
 
-  if [ "$TABLE_EXISTS" = "t" ]; then
-    WORKFLOW_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
-    "SELECT COUNT(*) FROM workflow_entity;" | xargs)
-    echo "Existing workflows: $WORKFLOW_COUNT"
-
-    if [ "$WORKFLOW_COUNT" -gt 0 ]; then
+  if [ -n "$MIGRATION_COUNT" ] && [ "$MIGRATION_COUNT" -gt 0 ]; then
+    # Verify table readability — catches corrupted schema/data
+    if docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+      "SELECT 1 FROM workflow_entity LIMIT 1;" >/dev/null 2>&1; then
+      WORKFLOW_COUNT=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+      "SELECT COUNT(*) FROM workflow_entity;" 2>/dev/null | xargs)
+      echo "Existing DB: $MIGRATION_COUNT migrations, $WORKFLOW_COUNT workflows"
       echo "✅ DB already populated → SKIP restore"
       SKIP_RESTORE=true
+    else
+      echo "⚠️ Migrations exist but workflow_entity unreadable → force restore"
     fi
   fi
 fi
@@ -545,16 +646,26 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   echo "❌ Bucket not accessible"
   exit 1
   fi
-  LATEST=$(gsutil ls -l gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql 2>/dev/null | \
+  # Minimum backup size (bytes) — reject truncated / empty dumps.
+  # A healthy n8n DB with ≥1 workflow is typically >500 KB uncompressed.
+  MIN_BACKUP_BYTES=500000
+  # Search both .sql and .sql.gz (gzip backups)
+  LATEST=$(gsutil ls -l gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql.gz 2>/dev/null | \
   grep -v TOTAL | \
-  awk '$1 > 500000 {print $2, $3}' | \
+  awk -v min="$MIN_BACKUP_BYTES" '$1 > min {print $2, $3}' | \
   sort | \
   tail -n 1 | \
   cut -d' ' -f2) || true  
 
   if [ -z "$LATEST" ]; then
-    echo "⚠️ No valid backup found → starting with empty DB"
-    SKIP_RESTORE=true
+    # Fallback: try any backup regardless of size (small/compressed DB edge-case)
+    echo "⚠️ No backup above $MIN_BACKUP_BYTES bytes, trying any backup..."
+    LATEST=$(gsutil ls gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql gs://${BACKUP_BUCKET_NAME}/n8n/n8n-*.sql.gz 2>/dev/null | sort | tail -n 1) || true
+  fi
+
+  if [ -z "$LATEST" ]; then
+    echo "❌ CRITICAL: No backup found in gs://${BACKUP_BUCKET_NAME}/n8n/"
+    exit 1
   else
     echo "Selected backup: $LATEST"
     CHECKSUM="$LATEST.sha256"
@@ -580,20 +691,78 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     fi
     echo "Checksum OK"
 
-    echo "Dropping DB..."
-    docker compose exec -T postgres psql -U n8n -d postgres -c "DROP DATABASE IF EXISTS n8n;"
-    docker compose exec -T postgres psql -U n8n -d postgres -c "CREATE DATABASE n8n;"
+    # Ensure DB exists (idempotent — no DROP needed,
+    # dump was created with --clean --if-exists so it handles table cleanup)
+    docker compose exec -T postgres psql -U n8n -d postgres -c "
+    SELECT 'CREATE DATABASE n8n'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='n8n')\gexec
+    "
 
-    echo "Restoring DB..."
-    if ! cat "/tmp/$FILENAME" | docker compose exec -T postgres \
+    # Isolate DB during restore — block external connections
+    docker compose exec -T postgres psql -U n8n -d postgres -c "
+    REVOKE CONNECT ON DATABASE n8n FROM PUBLIC;
+    SELECT pg_terminate_backend(pid)
+    FROM pg_stat_activity
+    WHERE datname = 'n8n' AND pid <> pg_backend_pid();
+    "
+
+    # Decompress if gzipped backup
+    if echo "$FILENAME" | grep -q '\.gz$'; then
+      echo "Verifying gzip integrity..."
+      gunzip -t "/tmp/$FILENAME" || { echo "❌ gzip corrupt"; exit 1; }
+      echo "Decompressing gzipped backup..."
+      gunzip -f "/tmp/$FILENAME"
+      FILENAME=$(echo "$FILENAME" | sed 's/\.gz$//')
+    fi
+
+    # Use docker cp instead of pipe — more reliable for large dumps
+    POSTGRES_CID=$(docker compose ps -q postgres)
+    docker cp "/tmp/$FILENAME" "$POSTGRES_CID:/tmp/restore.sql"
+
+    RESTORE_SIZE=$(stat -c%s "/tmp/$FILENAME" 2>/dev/null || echo "unknown")
+    echo "Restoring DB ($RESTORE_SIZE bytes)..."
+    if ! docker compose exec -T postgres \
       psql -U n8n -d n8n \
       --single-transaction \
-      --set ON_ERROR_STOP=on; then      
-      echo "❌ Restore failed"
+      --set ON_ERROR_STOP=on \
+      -f /tmp/restore.sql; then
+      echo "❌ Restore failed — cleaning DB for next boot retry"
+      docker compose exec -T postgres psql -U n8n -d postgres -c "
+      SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'n8n';
+      DROP DATABASE IF EXISTS n8n;
+      CREATE DATABASE n8n;
+      ALTER DATABASE n8n CONNECTION LIMIT -1;
+      GRANT CONNECT ON DATABASE n8n TO PUBLIC;
+      "
       exit 1
     fi
+
+    # Post-restore sanity check — verify DB is actually usable
+    docker compose exec -T postgres psql -U n8n -d n8n -c "ANALYZE;" 2>/dev/null || true
+
+    MIGRATION_CHECK=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+      "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs)
+    TABLE_CHECK=$(docker compose exec -T postgres psql -U n8n -d n8n -tAc \
+      "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | xargs)
+
+    if [ -z "$MIGRATION_CHECK" ] || [ "$MIGRATION_CHECK" -lt 1 ] || [ -z "$TABLE_CHECK" ] || [ "$TABLE_CHECK" -lt 5 ]; then
+      echo "❌ Restore produced invalid DB (migrations=$MIGRATION_CHECK, tables=$TABLE_CHECK) — cleaning for retry"
+      docker compose exec -T postgres psql -U n8n -d postgres -c "
+      SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'n8n';
+      DROP DATABASE IF EXISTS n8n;
+      CREATE DATABASE n8n;
+      ALTER DATABASE n8n CONNECTION LIMIT -1;
+      GRANT CONNECT ON DATABASE n8n TO PUBLIC;
+      "
+      exit 1
+    fi
+    echo "Sanity check: $MIGRATION_CHECK migrations, $TABLE_CHECK tables OK"
+
+    # Re-enable connections after successful restore
+    docker compose exec -T postgres psql -U n8n -d postgres -c "GRANT CONNECT ON DATABASE n8n TO PUBLIC;"
+    docker compose exec -T postgres rm -f /tmp/restore.sql
     echo "✅ Restore complete"
-    rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256"
+    rm -f "/tmp/$FILENAME" "/tmp/$FILENAME.sha256" "/tmp/$FILENAME.gz.sha256"
   fi
 fi
 
@@ -713,7 +882,7 @@ retry() {
 }
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-FILE="/tmp/n8n-$${TIMESTAMP}.sql"
+FILE="/tmp/n8n-$${TIMESTAMP}.sql.gz"
 CHECKSUM_FILE="$${FILE}.sha256"
 
 POSTGRES_CONTAINER=$(docker ps -qf name=postgres)
@@ -736,7 +905,19 @@ if [ "$COUNT" -lt 1 ] || [ "$SIZE" -lt 1000000 ]; then
   exit 0
 fi
 
-timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl --clean --if-exists n8n > "$FILE"
+# Disk pressure check — abort if <500MB free in /tmp
+AVAIL_KB=$(df --output=avail /tmp | tail -1 | xargs)
+if [ "$AVAIL_KB" -lt 512000 ]; then
+  echo "❌ SKIP backup: insufficient disk space ($${AVAIL_KB}KB free in /tmp)"
+  exit 1
+fi
+
+BACKUP_START=$(date +%s)
+# Force WAL flush to ensure backup contains latest committed data
+docker exec "$POSTGRES_CONTAINER" psql -U n8n -d n8n -c "CHECKPOINT;" 2>/dev/null || true
+timeout 300 docker exec "$POSTGRES_CONTAINER" pg_dump -U n8n --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 n8n | gzip > "$FILE"
+BACKUP_DURATION=$(( $(date +%s) - BACKUP_START ))
+echo "Backup duration: $${BACKUP_DURATION}s"
 if [ ! -s "$FILE" ]; then
   echo "❌ EMPTY BACKUP"
   exit 1
@@ -746,7 +927,7 @@ fi
 
 SUCCESS=false
 for i in {1..3}; do
-  if gsutil cp "$FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
+  if timeout 300 gsutil cp "$FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     SUCCESS=true
     break
   fi
@@ -760,7 +941,7 @@ fi
 
 CHECKSUM_OK=false
 for i in {1..3}; do
-  if gsutil cp "$CHECKSUM_FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
+  if timeout 60 gsutil cp "$CHECKSUM_FILE" gs://${BACKUP_BUCKET_NAME}/n8n/; then
     CHECKSUM_OK=true
     break
   fi
@@ -772,14 +953,25 @@ if [ "$CHECKSUM_OK" != "true" ]; then
   exit 1
 fi
 
-rm -f "$FILE" "$CHECKSUM_FILE"
+# Verify upload integrity — read back checksum from GCS and compare
+LOCAL_SUM=$(cat "$CHECKSUM_FILE" 2>/dev/null || true)
+if ! timeout 60 gsutil stat gs://${BACKUP_BUCKET_NAME}/n8n/$(basename "$CHECKSUM_FILE") >/dev/null 2>&1; then
+  echo "❌ Remote checksum missing after upload"
+  exit 1
+fi
+REMOTE_SUM=$(timeout 60 gsutil cat gs://${BACKUP_BUCKET_NAME}/n8n/$(basename "$CHECKSUM_FILE") 2>/dev/null || true)
+if [ -n "$REMOTE_SUM" ] && [ -n "$LOCAL_SUM" ] && [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
+  echo "❌ Checksum mismatch after upload — backup may be corrupt"
+  exit 1
+fi
 
+rm -f "$FILE" "$CHECKSUM_FILE"
 echo "BACKUP_OK $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EOF
 
 chmod +x /usr/local/bin/backup.sh
 
-echo "*/10 * * * * root BACKUP_BUCKET_NAME=${BACKUP_BUCKET_NAME} flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh > /var/log/n8n-backup.log 2>&1" > /etc/cron.d/n8n-backup
+echo '*/10 * * * * root BACKUP_BUCKET_NAME=${BACKUP_BUCKET_NAME} flock -n /tmp/n8n-backup.lock /usr/local/bin/backup.sh >> /var/log/n8n-backup.log 2>&1 || echo "Backup skipped (lock busy)" >> /var/log/n8n-backup.log' > /etc/cron.d/n8n-backup
 systemctl restart cron
 
 echo "=== ALL DONE ==="

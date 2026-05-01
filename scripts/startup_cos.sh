@@ -28,9 +28,10 @@ get_token() {
 get_secret() {
   local SECRET_NAME=$1
   local TOKEN=$(get_token)
-  curl -sf -H "Authorization: Bearer $TOKEN" \
-       "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/$SECRET_NAME/versions/latest:access" \
-       | grep -o '"data": "[^"]*' | cut -d'"' -f4 | docker run -i --rm busybox base64 -d
+  local RAW
+  RAW=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+       "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/$SECRET_NAME/versions/latest:access")
+  echo "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p' | base64 -d
 }
 
 # ==========================================
@@ -78,12 +79,103 @@ done
 # 3. Health server (AFTER Docker restart)
 # ==========================================
 echo "=== Starting Early Health Check Server (port 8080) ==="
-# busybox nc does NOT support -e flag, use pipe instead
-docker run -d --name health-server --restart always --network host busybox sh -c '
-while true; do
-  echo -e "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nBOOTSTRAP" | nc -l -p 8080 || true
-done
-'
+echo "=== Starting Early Health Check Server (systemd + docker) ==="
+
+cat <<'EOF' > /etc/systemd/system/health-server.service
+[Unit]
+Description=Early Health Check Server
+After=docker.service
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=2
+
+# убиваем старый контейнер если остался
+ExecStartPre=-/usr/bin/docker rm -f health-server
+
+ExecStart=/usr/bin/docker run \
+  --name health-server \
+  --network host \
+  --restart=no \
+  python:3-alpine python3 - <<'PY'
+import http.server, socketserver, socket, urllib.request, time
+
+START_TIME = time.time()
+BOOTSTRAP_WINDOW = 1200
+STALL_TIMEOUT = 300
+MAX_BOOT_TIME = 1800
+LAST_PROGRESS_FILE = '/tmp/health_progress'
+
+def touch_progress():
+    with open(LAST_PROGRESS_FILE, 'w') as f:
+        f.write(str(time.time()))
+
+def get_last_progress():
+    try:
+        with open(LAST_PROGRESS_FILE) as f:
+            return float(f.read().strip())
+    except:
+        return START_TIME
+
+def check_port(port):
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=1)
+        s.close()
+        return True
+    except:
+        return False
+
+def check_http(url):
+    try:
+        urllib.request.urlopen(url, timeout=2)
+        return True
+    except:
+        return False
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args): pass
+
+    def do_GET(self):
+        uptime = time.time() - START_TIME
+        try:
+            n8n_ok = check_http("http://127.0.0.1:5678/healthz")
+            pg_ok = check_port(5432)
+            ready = (n8n_ok and pg_ok)
+            if n8n_ok or pg_ok:
+                touch_progress()
+        except:
+            ready = False
+
+        if not ready and uptime > MAX_BOOT_TIME:
+            self.send_response(500); self.end_headers(); self.wfile.write(b"HARD_FAIL"); return
+
+        if not ready and uptime < BOOTSTRAP_WINDOW:
+            self.send_response(200); self.end_headers(); self.wfile.write(b"BOOTSTRAP"); return
+
+        if not ready:
+            if time.time() - get_last_progress() > STALL_TIMEOUT:
+                self.send_response(500); self.end_headers(); self.wfile.write(b"STALLED"); return
+            self.send_response(200); self.end_headers(); self.wfile.write(b"BOOTSTRAP"); return
+
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+
+class S(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads=True
+    allow_reuse_address=True
+
+with S(("",8080),Handler) as httpd:
+    httpd.serve_forever()
+PY
+
+ExecStop=/usr/bin/docker stop health-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now health-server.service
 
 # ==========================================
 # 4. Wait for GCP metadata
@@ -162,12 +254,21 @@ mkdir -p /home/docker/n8n
 # ==========================================
 docker network create n8n-net || true
 
+# Disk pressure check before image pull
+AVAIL_KB=$(df --output=avail / | tail -1 | xargs)
+if [ "$AVAIL_KB" -lt 2097152 ]; then
+  echo "❌ Low disk space ($${AVAIL_KB}KB free, need 2GB) — aborting before pull"
+  exit 1
+fi
+
 echo "=== Pulling Images ==="
 N8N_TARGET="${n8n_ar_image}"
 CF_TARGET="${cloudflared_ar_image}"
 
 # Authenticate Docker to Artifact Registry
-echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin https://${ar_location}-docker.pkg.dev 2>/dev/null || true
+if ! echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin https://${ar_location}-docker.pkg.dev 2>/dev/null; then
+  echo "⚠️ AR login failed, fallback to public images expected"
+fi
 
 retry docker pull "$N8N_TARGET" || {
   echo "⚠️ AR miss for n8n → fallback to public"
@@ -186,6 +287,22 @@ retry docker pull postgres:15-alpine || { echo "❌ Failed to pull postgres"; ex
 # ==========================================
 # 8. Start Postgres
 # ==========================================
+# Write secrets to tmpfs (not written to disk) for Docker _FILE support
+umask 077
+mkdir -p /dev/shm/n8n-secrets
+printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
+printf "%s" "$N8N_KEY" > /dev/shm/n8n-secrets/n8n_key
+printf "%s" "$CF_TOKEN" > /dev/shm/n8n-secrets/cf_token
+umask 022
+
+echo "=== Verify Secrets Before Start ==="
+for f in db_password n8n_key cf_token; do
+  if [ ! -s "/dev/shm/n8n-secrets/$f" ]; then
+    echo "❌ Missing secret: $f (secret fetch may have partially failed)"
+    exit 1
+  fi
+done
+
 echo "=== Starting Postgres ==="
 docker run -d \
   --name postgres \
@@ -193,9 +310,14 @@ docker run -d \
   --restart unless-stopped \
   -p 127.0.0.1:5432:5432 \
   -v /mnt/disks/data/postgres:/var/lib/postgresql/data \
+  -v /dev/shm/n8n-secrets/db_password:/run/secrets/db_password:ro \
   -e POSTGRES_DB="${db_name}" \
   -e POSTGRES_USER="${db_user}" \
-  -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+  -e POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
+  --health-cmd="pg_isready -U ${db_user}" \
+  --health-interval=5s \
+  --health-timeout=3s \
+  --health-retries=5 \
   postgres:15-alpine
 
 echo "=== Waiting for Postgres ==="
@@ -225,12 +347,18 @@ echo "=== Backup Restore (DR only) ==="
 SKIP_RESTORE=false
 DB_EXISTS=$(docker exec postgres psql -U "${db_user}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" | xargs)
 if [ "$DB_EXISTS" = "1" ]; then
-  TABLE_EXISTS=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='workflow_entity');" 2>/dev/null | xargs)
-  if [ "$TABLE_EXISTS" = "t" ]; then
-    COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM workflow_entity;" | xargs)
-    if [ "$COUNT" -gt 0 ]; then
-      echo "✅ DB populated ($COUNT workflows) → SKIP restore"
+  # Use migrations table as the source of truth — it's populated by n8n on
+  # every successful boot regardless of whether the user created workflows.
+  MIGRATION_COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs)
+  if [ -n "$MIGRATION_COUNT" ] && [ "$MIGRATION_COUNT" -gt 0 ]; then
+    # Verify table readability — catches corrupted schema/data
+    if docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc \
+      "SELECT 1 FROM workflow_entity LIMIT 1;" >/dev/null 2>&1; then
+      WORKFLOW_COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM workflow_entity;" 2>/dev/null | xargs)
+      echo "✅ DB populated ($MIGRATION_COUNT migrations, $WORKFLOW_COUNT workflows) → SKIP restore"
       SKIP_RESTORE=true
+    else
+      echo "⚠️ Migrations exist but workflow_entity unreadable → force restore"
     fi
   fi
 fi
@@ -242,25 +370,108 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   BACKUP_INFO=$(curl -sf -H "Authorization: Bearer $TOKEN" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
 
-  LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep '\.sql$' | sort | tail -n 1)
+  # Search for both .sql and .sql.gz backups
+  LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep -E '\.(sql|sql\.gz)$' | sort | tail -n 1)
 
   if [ -n "$LATEST_OBJ" ]; then
     echo "Restoring from $LATEST_OBJ"
     OBJ_ENC=$(echo "$LATEST_OBJ" | sed 's/\//%2F/g')
+    # Download backup — detect extension for gzip support
+    DOWNLOAD_FILE="/home/docker/backup.sql"
+    if echo "$LATEST_OBJ" | grep -q '\.gz$'; then
+      DOWNLOAD_FILE="/home/docker/backup.sql.gz"
+    fi
     curl -sf -H "Authorization: Bearer $TOKEN" \
-         "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${OBJ_ENC}?alt=media" > /home/docker/backup.sql
+         "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${OBJ_ENC}?alt=media" > "$DOWNLOAD_FILE"
 
-    if [ -s /home/docker/backup.sql ]; then
-      docker exec postgres psql -U "${db_user}" -d postgres -c "DROP DATABASE IF EXISTS ${db_name};"
-      docker exec postgres psql -U "${db_user}" -d postgres -c "CREATE DATABASE ${db_name};"
-      cat /home/docker/backup.sql | docker exec -i postgres psql -U "${db_user}" -d "${db_name}" --single-transaction
+    if [ -s /home/docker/backup.sql ] || [ -s /home/docker/backup.sql.gz ]; then
+      # Decompress if gzipped backup
+      if [ -s /home/docker/backup.sql.gz ]; then
+        echo "Verifying gzip integrity..."
+        docker run -i --rm -v /home/docker:/data busybox sh -c 'gunzip -t /data/backup.sql.gz' || { echo "❌ gzip corrupt"; exit 1; }
+        echo "Decompressing gzipped backup..."
+        docker run -i --rm -v /home/docker:/data busybox gunzip -f /data/backup.sql.gz
+      fi
+
+      # Verify checksum if available
+      CHECKSUM_OBJ="$LATEST_OBJ.sha256"
+      CHECKSUM_ENC=$(echo "$CHECKSUM_OBJ" | sed 's/\//%2F/g')
+      if curl -sf -H "Authorization: Bearer $TOKEN" \
+           "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${CHECKSUM_ENC}?alt=media" > /home/docker/backup.sha256 2>/dev/null; then
+        echo "Verifying checksum..."
+        (cd /home/docker && sha256sum -c backup.sha256) || { echo "❌ Checksum failed"; exit 1; }
+        echo "Checksum OK"
+        rm -f /home/docker/backup.sha256
+      else
+        echo "⚠️ No checksum available, skipping verification"
+      fi
+
+      # Ensure DB exists (idempotent — no DROP needed,
+      # dump was created with --clean --if-exists so it handles table cleanup)
+      docker exec postgres psql -U "${db_user}" -d postgres -c "
+      SELECT 'CREATE DATABASE ${db_name}'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${db_name}')\gexec
+      "
+
+      # Isolate DB during restore — block external connections
+      docker exec postgres psql -U "${db_user}" -d postgres -c "
+      REVOKE CONNECT ON DATABASE ${db_name} FROM PUBLIC;
+      SELECT pg_terminate_backend(pid)
+      FROM pg_stat_activity
+      WHERE datname = '${db_name}' AND pid <> pg_backend_pid();
+      "
+
+      # Use docker cp instead of pipe — more reliable for large dumps
+      docker cp /home/docker/backup.sql postgres:/tmp/restore.sql
+
+      RESTORE_SIZE=$(stat -c%s /home/docker/backup.sql 2>/dev/null || echo "unknown")
+      echo "Restoring DB ($RESTORE_SIZE bytes)..."
+      if ! docker exec postgres psql -U "${db_user}" -d "${db_name}" --single-transaction --set ON_ERROR_STOP=on -f /tmp/restore.sql; then
+        echo "❌ Restore failed — cleaning DB for next boot retry"
+        docker exec postgres psql -U "${db_user}" -d postgres -c "
+        SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}';
+        DROP DATABASE IF EXISTS ${db_name};
+        CREATE DATABASE ${db_name};
+        ALTER DATABASE ${db_name} CONNECTION LIMIT -1;
+        GRANT CONNECT ON DATABASE ${db_name} TO PUBLIC;
+        "
+        rm -f /home/docker/backup.sql
+        exit 1
+      fi
+
+      # Post-restore sanity check
+      docker exec postgres psql -U "${db_user}" -d "${db_name}" -c "ANALYZE;" 2>/dev/null || true
+
+      MIGRATION_CHECK=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs)
+      TABLE_CHECK=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc \
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | xargs)
+
+      if [ -z "$MIGRATION_CHECK" ] || [ "$MIGRATION_CHECK" -lt 1 ] || [ -z "$TABLE_CHECK" ] || [ "$TABLE_CHECK" -lt 5 ]; then
+        echo "❌ Restore produced invalid DB (migrations=$MIGRATION_CHECK, tables=$TABLE_CHECK) — cleaning for retry"
+        docker exec postgres psql -U "${db_user}" -d postgres -c "
+        SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}';
+        DROP DATABASE IF EXISTS ${db_name};
+        CREATE DATABASE ${db_name};
+        ALTER DATABASE ${db_name} CONNECTION LIMIT -1;
+        GRANT CONNECT ON DATABASE ${db_name} TO PUBLIC;
+        "
+        rm -f /home/docker/backup.sql
+        exit 1
+      fi
+      echo "Sanity check: $MIGRATION_CHECK migrations, $TABLE_CHECK tables OK"
+
+      # Re-enable connections after successful restore
+      docker exec postgres psql -U "${db_user}" -d postgres -c "GRANT CONNECT ON DATABASE ${db_name} TO PUBLIC;"
+      docker exec postgres rm -f /tmp/restore.sql
       echo "✅ Restore complete"
       rm -f /home/docker/backup.sql
     else
-      echo "⚠️ Failed to download backup, starting fresh"
+      echo "❌ CRITICAL: Failed to download backup"
+      exit 1
     fi
   else
-    echo "⚠️ No backups found, starting fresh"
+    echo "❌ CRITICAL: No backups found in ${BACKUP_BUCKET_NAME}"
+    exit 1
   fi
 fi
 
@@ -273,13 +484,14 @@ docker run -d \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:5678:5678 \
+  -v /dev/shm/n8n-secrets:/run/secrets:ro \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
   -e DB_POSTGRESDB_PORT="${db_port}" \
   -e DB_POSTGRESDB_DATABASE="${db_name}" \
   -e DB_POSTGRESDB_USER="${db_user}" \
-  -e DB_POSTGRESDB_PASSWORD="$DB_PASSWORD" \
-  -e N8N_ENCRYPTION_KEY="$N8N_KEY" \
+  -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+  -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
   -e N8N_EXECUTIONS_MODE=regular \
   -e N8N_CONCURRENCY_PRODUCTION_LIMIT=1 \
   -e N8N_LOG_LEVEL=warn \
@@ -308,8 +520,6 @@ for i in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     echo "✅ n8n is ready"
     N8N_READY=true
-    # Switch health server from BOOTSTRAP to OK
-    docker exec health-server sh -c 'kill $$(pgrep nc) 2>/dev/null; true'
     break
   fi
   echo "⏳ Waiting for n8n ($i/60)..."
@@ -327,8 +537,9 @@ docker run -d \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
+  -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
   "$CF_TARGET" \
-  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token "$CF_TOKEN"
+  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
 
 # ==========================================
 # 12. Final health verification
@@ -372,7 +583,7 @@ cat <<EOF > /home/docker/backup.sh
 set -e
 TOKEN=\$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
-FILE="/tmp/n8n-\$${TIMESTAMP}.sql"
+FILE="/tmp/n8n-\$${TIMESTAMP}.sql.gz"
 
 COUNT=\$(docker exec postgres psql -U ${db_user} -d ${db_name} -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
 if [ "\$COUNT" -lt 1 ]; then
@@ -386,7 +597,19 @@ if [ "\$SIZE" -lt 1000000 ]; then
   exit 0
 fi
 
-timeout 300 docker exec postgres pg_dump -U ${db_user} --no-owner --no-acl --clean --if-exists ${db_name} > "\$FILE"
+# Disk pressure check — abort if <500MB free in /tmp
+AVAIL_KB=\$(df --output=avail /tmp | tail -1 | xargs)
+if [ "\$AVAIL_KB" -lt 512000 ]; then
+  echo "❌ SKIP backup: insufficient disk space (\$${AVAIL_KB}KB free in /tmp)"
+  exit 1
+fi
+
+BACKUP_START=\$(date +%s)
+# Force WAL flush to ensure backup contains latest committed data
+docker exec postgres psql -U ${db_user} -d ${db_name} -c "CHECKPOINT;" 2>/dev/null || true
+timeout 300 docker exec postgres pg_dump -U ${db_user} --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 ${db_name} | gzip > "\$FILE"
+BACKUP_DURATION=\$(( \$(date +%s) - BACKUP_START ))
+echo "Backup duration: \$${BACKUP_DURATION}s"
 if [ ! -s "\$FILE" ]; then
   echo "❌ EMPTY BACKUP"
   exit 1
@@ -395,16 +618,25 @@ fi
 (cd /tmp && sha256sum "\$(basename "\$FILE")") > "\$FILE.sha256"
 
 # Upload backup
-curl -sf -X POST -H "Authorization: Bearer \$TOKEN" \
+curl --max-time 300 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
      -H "Content-Type: application/octet-stream" \
      --data-binary @"\$FILE" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\$${TIMESTAMP}.sql"
+     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\$${TIMESTAMP}.sql.gz"
 
 # Upload checksum
-curl -sf -X POST -H "Authorization: Bearer \$TOKEN" \
+curl --max-time 60 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
      -H "Content-Type: text/plain" \
      --data-binary @"\$FILE.sha256" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\$${TIMESTAMP}.sql.sha256"
+     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\$${TIMESTAMP}.sql.gz.sha256"
+
+# Verify upload integrity — read back checksum from GCS and compare with local
+LOCAL_SUM=\$(cat "\$FILE.sha256" 2>/dev/null || true)
+REMOTE_SUM=\$(curl --max-time 60 -sf -H "Authorization: Bearer \$TOKEN" \
+  "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/n8n%2Fn8n-\$${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
+if [ -n "\$REMOTE_SUM" ] && [ -n "\$LOCAL_SUM" ] && [ "\$REMOTE_SUM" != "\$LOCAL_SUM" ]; then
+  echo "❌ Checksum mismatch after upload — backup may be corrupt"
+  exit 1
+fi
 
 rm -f "\$FILE" "\$FILE.sha256"
 echo "BACKUP_OK \$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
