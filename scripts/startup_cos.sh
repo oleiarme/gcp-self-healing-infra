@@ -295,47 +295,26 @@ fi
 echo "=== Pre-clean Docker ==="
 docker system prune -af --volumes || true
 
-echo "=== Pulling Images ==="
-N8N_TARGET="${n8n_ar_image}"
-CF_TARGET="${cloudflared_ar_image}"
+echo "=== Preload Docker Images from GCS ==="
 
-echo "=== Docker login to Artifact Registry ==="
+IMAGE_BUCKET="gs://n8n-images-cache-idealist426118/images"
+mkdir -p /tmp/images
 
-TOKEN=$(get_token)
+echo "→ Download images"
+gsutil -m cp "$IMAGE_BUCKET/n8n.tar" /tmp/images/n8n.tar || exit 1
+gsutil -m cp "$IMAGE_BUCKET/cloudflared.tar" /tmp/images/cloudflared.tar || exit 1
+gsutil -m cp "$IMAGE_BUCKET/postgres.tar" /tmp/images/postgres.tar || exit 1
 
-if [ -z "$TOKEN" ]; then
-  echo "❌ Failed to get token → disable AR"
-  USE_AR=false
-else
-  if echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin \
-    https://${ar_location}-docker.pkg.dev; then
-    echo "✅ AR login successful"
-    USE_AR=true
-  else
-    echo "⚠️ AR login failed → fallback to public"
-    USE_AR=false
-  fi
-fi
+echo "→ Load images into Docker"
+docker load < /tmp/images/n8n.tar || exit 1
+docker load < /tmp/images/cloudflared.tar || exit 1
+docker load < /tmp/images/postgres.tar || exit 1
 
-retry docker pull "$N8N_TARGET" || {
-  echo "⚠️ AR miss for n8n → fallback to public"
-  N8N_TARGET="${n8n_image}"
-  retry docker pull "$N8N_TARGET" || { echo "❌ Failed to pull n8n"; exit 1; }
-}
+echo "✅ Images preloaded"
 
-if [ "$USE_AR" = true ]; then
-  retry docker pull "$CF_TARGET" || {
-    echo "⚠️ AR failed → fallback to public"
-    CF_TARGET="${cloudflared_image}"
-    retry docker pull "$CF_TARGET" || { echo "❌ Failed to pull cloudflared"; exit 1; }
-  }
-else
-  echo "⚠️ Skipping AR → using public image"
-  CF_TARGET="${cloudflared_image}"
-  retry docker pull "$CF_TARGET" || { echo "❌ Failed to pull cloudflared"; exit 1; }
-fi
-
-retry docker pull postgres:15-alpine || { echo "❌ Failed to pull postgres"; exit 1; }
+# Fix image names (важно!)
+N8N_TARGET="docker.n8n.io/n8nio/n8n@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af"
+CF_TARGET="docker.io/cloudflare/cloudflared@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
 
 # ==========================================
 # 8. Start Postgres

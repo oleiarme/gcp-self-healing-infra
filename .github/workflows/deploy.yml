@@ -48,6 +48,31 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
       
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pull images (by digest for determinism)
+        run: |
+          docker pull docker.n8n.io/n8nio/n8n@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af
+          docker pull docker.io/cloudflare/cloudflared@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0
+          docker pull postgres:15-alpine
+      
+      - name: Save images to tar
+        run: |
+          mkdir -p artifacts
+          docker save docker.n8n.io/n8nio/n8n@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af -o artifacts/n8n.tar
+          docker save docker.io/cloudflare/cloudflared@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0 -o artifacts/cloudflared.tar
+          docker save postgres:15-alpine -o artifacts/postgres.tar
+
+      - name: Upload to GCS
+        run: |
+          gsutil -m cp artifacts/*.tar gs://n8n-images-cache-idealist426118/images/
+          
       # Mirror public images into AR BEFORE plan/apply so the new VM finds
       # the correct digest-tagged image immediately.  Skips on first deploy
       # when the AR repo doesn't exist yet (VM falls back to public).
