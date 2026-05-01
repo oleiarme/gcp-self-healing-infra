@@ -79,27 +79,12 @@ done
 # 3. Health server (AFTER Docker restart)
 # ==========================================
 echo "=== Starting Early Health Check Server (port 8080) ==="
-echo "=== Starting Early Health Check Server (systemd + docker) ==="
-
-cat <<'EOF' > /etc/systemd/system/health-server.service
-[Unit]
-Description=Early Health Check Server
-After=docker.service
-Requires=docker.service
-
-[Service]
-Restart=always
-RestartSec=2
-
-# убиваем старый контейнер если остался
-ExecStartPre=-/usr/bin/docker rm -f health-server
-
-ExecStart=/usr/bin/docker run \
-  --name health-server \
-  --network host \
-  --restart=no \
-  python:3-alpine python3 - <<'PY'
-import http.server, socketserver, socket, urllib.request, time
+cat <<'EOF' > /tmp/health_server.py
+import http.server
+import socketserver
+import time
+import socket
+import urllib.request
 
 START_TIME = time.time()
 BOOTSTRAP_WINDOW = 1200
@@ -134,48 +119,60 @@ def check_http(url):
         return False
 
 class Handler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, format, *args): pass
+    def log_message(self, format, *args):
+        pass
 
     def do_GET(self):
         uptime = time.time() - START_TIME
+
         try:
             n8n_ok = check_http("http://127.0.0.1:5678/healthz")
             pg_ok = check_port(5432)
             ready = (n8n_ok and pg_ok)
+
             if n8n_ok or pg_ok:
                 touch_progress()
         except:
             ready = False
 
         if not ready and uptime > MAX_BOOT_TIME:
-            self.send_response(500); self.end_headers(); self.wfile.write(b"HARD_FAIL"); return
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"HARD_FAIL")
+            return
 
         if not ready and uptime < BOOTSTRAP_WINDOW:
-            self.send_response(200); self.end_headers(); self.wfile.write(b"BOOTSTRAP"); return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
 
         if not ready:
             if time.time() - get_last_progress() > STALL_TIMEOUT:
-                self.send_response(500); self.end_headers(); self.wfile.write(b"STALLED"); return
-            self.send_response(200); self.end_headers(); self.wfile.write(b"BOOTSTRAP"); return
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"STALLED")
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"BOOTSTRAP")
+            return
 
-        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
 
-class S(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    daemon_threads=True
-    allow_reuse_address=True
+class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
-with S(("",8080),Handler) as httpd:
+with ThreadingTCPServer(("", 8080), Handler) as httpd:
     httpd.serve_forever()
-PY
-
-ExecStop=/usr/bin/docker stop health-server
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable --now health-server.service
+docker run -d --name health-server --restart always --network host \
+  -v /tmp/health_server.py:/health_server.py:ro \
+  python:3-alpine python3 /health_server.py
 
 # ==========================================
 # 4. Wait for GCP metadata
@@ -292,7 +289,6 @@ umask 077
 mkdir -p /dev/shm/n8n-secrets
 printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
 printf "%s" "$N8N_KEY" > /dev/shm/n8n-secrets/n8n_key
-printf "%s" "$CF_TOKEN" > /dev/shm/n8n-secrets/cf_token
 umask 022
 
 echo "=== Verify Secrets Before Start ==="

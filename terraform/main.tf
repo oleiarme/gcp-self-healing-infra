@@ -123,6 +123,24 @@ resource "google_project_iam_member" "vm_sa_metric_writer" {
 # and the output-only documentation is the sole safeguard (unchanged
 # behaviour for repos that haven't opted in).
 locals {
+  startup_rendered = templatefile("${path.module}/../scripts/startup_cos.sh", {
+  project_id            = var.project_id
+  db_host               = local.effective_db_host
+  db_user               = var.db_user
+  DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
+  N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
+  CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
+  db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
+  db_port               = "5432"
+  n8n_image             = var.n8n_image
+  cloudflared_image     = var.cloudflared_image
+  n8n_ar_image          = local.n8n_ar_image
+  cloudflared_ar_image  = local.cf_ar_image
+  ar_location           = var.region
+  BACKUP_BUCKET_NAME    = var.backup_bucket_name})
+
+  startup_hash = md5(local.startup_rendered)
+  
   wif_enforcement_enabled = var.wif_pool_id != "" && var.wif_provider_id != ""
   wif_expected_condition  = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
 
@@ -381,7 +399,7 @@ resource "google_compute_instance_template" "tpl" {
     google_secret_manager_secret.n8n_key,
     google_secret_manager_secret.cf_token
   ]
-  name         = "n8n-${substr(md5(timestamp()), 0, 6)}"
+  name = "n8n-${substr(local.startup_hash, 0, 6)}"
   machine_type = "e2-micro"
   tags         = ["n8n"]
 
@@ -434,24 +452,8 @@ resource "google_compute_instance_template" "tpl" {
     # rely on interactive SSH — everything is either a `terraform apply`
     # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
     block-project-ssh-keys = "true"
-    startup-script = templatefile("${path.module}/../scripts/startup_cos.sh", {
-      project_id            = var.project_id
-      db_host               = local.effective_db_host
-      db_user               = var.db_user
-      DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
-      N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
-      CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
-      db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
-      db_port               = "5432"
-      n8n_image             = var.n8n_image
-      cloudflared_image     = var.cloudflared_image
-      n8n_ar_image          = local.n8n_ar_image
-      cloudflared_ar_image  = local.cf_ar_image
-      ar_location           = var.region
-      BACKUP_BUCKET_NAME    = var.backup_bucket_name
-
-    })
-    force_update = timestamp()
+    startup-script = local.startup_rendered
+    
   }
 
   lifecycle {
