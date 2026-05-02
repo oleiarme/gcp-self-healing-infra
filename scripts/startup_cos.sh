@@ -362,17 +362,30 @@ if [ "$AVAIL_KB" -lt 1048576 ]; then
 fi
 
 
-echo "=== Docker login via access token ==="
+echo "=== Docker auth for Artifact Registry (COS-safe) ==="
 TOKEN=$(get_token)
 
 if [ -n "${n8n_ar_image:-}" ]; then
   AR_DOMAIN=$(echo "${n8n_ar_image}" | cut -d'/' -f1)
 
-  echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "https://${AR_DOMAIN}" || {
-    echo "⚠️ AR login failed, fallback will be used"
+  mkdir -p /mnt/stateful_partition/docker-config
+  export DOCKER_CONFIG=/mnt/stateful_partition/docker-config
+
+  AUTH=$(printf "oauth2accesstoken:%s" "$TOKEN" | base64 -w 0)
+
+  cat > "$DOCKER_CONFIG/config.json" <<EOF
+{
+  "auths": {
+    "${AR_DOMAIN}": {
+      "auth": "${AUTH}"
+    }
   }
+}
+EOF
+
+  echo "✅ Docker auth configured for ${AR_DOMAIN}"
 else
-  echo "⚠️ n8n_ar_image not set → skipping AR login"
+  echo "⚠️ n8n_ar_image not set → skipping AR auth"
 fi
 
 
