@@ -296,10 +296,22 @@ docker system prune -af --volumes || true
 
 echo "=== Auth to Artifact Registry ==="
 
-ACCESS_TOKEN=$(get_token)
+echo "=== Configure Docker credential helper ==="
 
-echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken \
-  --password-stdin https://us-central1-docker.pkg.dev
+mkdir -p /mnt/stateful_partition/docker-config
+
+cat <<EOF > /mnt/stateful_partition/docker-config/config.json
+{
+  "credHelpers": {
+    "us-central1-docker.pkg.dev": "gcr"
+  }
+}
+EOF
+
+export DOCKER_CONFIG=/mnt/stateful_partition/docker-config
+
+echo "✅ Docker will use gcr credential helper"
+
 echo "=== Pull Docker images ==="
 pull_with_fallback() {
   local name="$1"
