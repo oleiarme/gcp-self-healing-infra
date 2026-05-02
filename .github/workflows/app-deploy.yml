@@ -39,8 +39,8 @@ jobs:
       ZONE: ${{ vars.TF_VAR_zone || 'us-central1-a' }}
       AR_REPO: n8n-docker
       # Resolve image refs: workflow input > GitHub var > hardcoded default
-      N8N_IMAGE: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || 'docker.n8n.io/n8nio/n8n:2.17.7@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af' }}
-      CF_IMAGE: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
+      N8N_IMAGE: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:2.17.7@sha256:a293b89bac876872a0c1ef0fbbb7ce056aa2d215f62917acf032ecb8010199af' }}
+      CF_IMAGE: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || 'docker.io/cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
       N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || '2.17.7' }}
       CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
     steps:
