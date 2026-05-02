@@ -452,6 +452,9 @@ printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
 printf "%s" "$N8N_KEY" > /dev/shm/n8n-secrets/n8n_key
 printf "%s" "$CF_TOKEN" > /dev/shm/n8n-secrets/cf_token
 umask 022
+chmod 644 /dev/shm/n8n-secrets/db_password
+chmod 644 /dev/shm/n8n-secrets/n8n_key
+chmod 644 /dev/shm/n8n-secrets/cf_token
 
 echo "=== Verify Secrets Before Start ==="
 for f in db_password n8n_key cf_token; do
