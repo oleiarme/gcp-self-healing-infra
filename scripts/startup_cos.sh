@@ -593,13 +593,15 @@ touch_progress_safe
 # ==========================================
 # RESTORE ENTRY POINT (single gate)
 # ==========================================
+Да, меняем весь блок целиком. Вот финальная версия — просто замени всё от if [ "$SKIP_RESTORE" != "true" ]; then до закрывающего fi:
+
+bash
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "→ DB not healthy or missing → restore required"
   echo "=== ENTER RESTORE BLOCK ==="
   touch_progress_safe
 
   echo "→ Requesting backup list from GCS..."
-
   TOKEN=$(get_token)
 
   BACKUP_INFO=$(timeout 20 curl -sf \
@@ -608,14 +610,10 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 
   if [ -z "$BACKUP_INFO" ]; then
     echo "⚠️ EMPTY BACKUP RESPONSE — skipping restore"
-    SKIP_RESTORE=true
     touch_progress_safe
   else
     echo "DEBUG: BACKUP_INFO length=${#BACKUP_INFO}"
     echo "$BACKUP_INFO" | head -c 300 || true
-    touch_progress_safe
-
-    echo "→ Backup list received"
     touch_progress_safe
 
     LATEST_OBJ=$(echo "$BACKUP_INFO" \
@@ -630,11 +628,12 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     if [ -z "$LATEST_OBJ" ]; then
       echo "⚠️ No backup files found in GCS → skipping restore"
     else
-      echo "→ Downloading backup: $LATEST_OBJ"
-      ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
-      RESTORE_FILE="/mnt/disks/data/tmp/restore.sql.gz"
+      RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
       mkdir -p /mnt/disks/data/tmp
 
+      # --- 1. Скачиваем файл ---
+      echo "→ Downloading backup: $LATEST_OBJ"
+      ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
       TOKEN=$(get_token)
       curl -sf --max-time 600 \
         -H "Authorization: Bearer $TOKEN" \
@@ -645,20 +644,52 @@ if [ "$SKIP_RESTORE" != "true" ]; then
         echo "❌ Downloaded backup is empty"
         exit 1
       fi
+      echo "✅ Backup downloaded ($(du -sh "$RESTORE_FILE" | cut -f1))"
 
-      echo "→ Restoring backup into Postgres..."
-      gunzip -c "$RESTORE_FILE" | docker exec -i postgres psql \
-        -U "${db_user}" \
-        -d "${db_name}" \
-        --set ON_ERROR_STOP=on
+      # --- 2. Проверяем checksum (после скачивания) ---
+      CHECKSUM_OBJ="${LATEST_OBJ}.sha256"
+      ENCODED_CS=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${CHECKSUM_OBJ}', safe=''))")
+      TOKEN=$(get_token)
+      REMOTE_SUM=$(curl -sf --max-time 30 \
+        -H "Authorization: Bearer $TOKEN" \
+        "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_CS}?alt=media" \
+        2>/dev/null || true)
 
-      if [ $? -ne 0 ]; then
-        echo "❌ Restore failed"
-        exit 1
+      if [ -n "$REMOTE_SUM" ]; then
+        LOCAL_SUM=$(sha256sum "$RESTORE_FILE" | awk '{print $1}')
+        if [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
+          echo "❌ Checksum mismatch — backup corrupt"
+          rm -f "$RESTORE_FILE"
+          exit 1
+        fi
+        echo "✅ Checksum verified"
+      else
+        echo "⚠️ No checksum file found — skipping verification"
+      fi
+
+      # --- 3. Определяем формат и восстанавливаем ---
+      echo "→ Detecting backup format..."
+      if file "$RESTORE_FILE" | grep -q 'gzip'; then
+        echo "→ Format: gzip compressed SQL"
+        if ! gunzip -c "$RESTORE_FILE" | docker exec -i postgres psql \
+            -U "${db_user}" -d "${db_name}" --set ON_ERROR_STOP=on; then
+          echo "❌ Restore failed"
+          rm -f "$RESTORE_FILE"
+          exit 1
+        fi
+      else
+        echo "→ Format: plain SQL"
+        if ! docker exec -i postgres psql \
+            -U "${db_user}" -d "${db_name}" --set ON_ERROR_STOP=on < "$RESTORE_FILE"; then
+          echo "❌ Restore failed"
+          rm -f "$RESTORE_FILE"
+          exit 1
+        fi
       fi
 
       rm -f "$RESTORE_FILE"
       echo "✅ Restore completed"
+      touch_progress_safe
     fi
   fi
 fi
