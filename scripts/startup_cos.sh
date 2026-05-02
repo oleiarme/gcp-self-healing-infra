@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 set -o pipefail
+set -u
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
 echo "Starting n8n on COS..."
@@ -36,7 +37,7 @@ get_secret() {
 
   local TOKEN=$(get_token)
   local RAW
-  RAW=$(curl -sf -H "Authorization: Bearer $(get_token)" \
+  RAW=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
        "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/$SECRET_NAME/versions/latest:access"
   DATA=$(echo "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p')
 
@@ -317,22 +318,16 @@ fi
 echo "=== Pre-clean Docker ==="
 docker system prune -af --volumes || true
 
-echo "=== Auth to Artifact Registry ==="
 
-echo "=== Configure Docker credential helper ==="
 
-mkdir -p /mnt/stateful_partition/docker-config
 
-cat <<EOF > /mnt/stateful_partition/docker-config/config.json
-{
-  "credHelpers": {
-    "us-central1-docker.pkg.dev": "gcr"
-  }
+
+echo "=== Docker login via access token ==="
+TOKEN=$(get_token)
+
+echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev || {
+  echo "⚠️ AR login failed, fallback will be used"
 }
-EOF
-
-export DOCKER_CONFIG=/mnt/stateful_partition/docker-config
-
 echo "✅ Docker will use gcr credential helper"
 
 echo "=== Pull Docker images ==="
@@ -509,7 +504,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $(get_token)" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
   
-  echo "→ Backup list received (size: $${#BACKUP_INFO})"
+  echo "→ Backup list received (size: ${#BACKUP_INFO})"
   # Search for both .sql and .sql.gz backups
   LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep -E '\.(sql|sql\.gz)$' | sort | tail -n 1)
 
@@ -687,8 +682,8 @@ docker run -d \
   -p 127.0.0.1:2000:2000 \
   -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
   "$CF_TARGET" \
-  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
-
+  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run \
+  --token "$(cat /run/secrets/cf_token)"
 # ==========================================
 # 12. Final health verification
 # ==========================================
@@ -726,7 +721,7 @@ fi
 # 13. Backup via systemd timer
 # ==========================================
 echo "=== Setup Backup Timer ==="
-cat <<EOF > /home/docker/backup.sh
+cat <<'EOF' > /home/docker/backup.sh
 #!/bin/bash
 set -e
 TOKEN=\$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
@@ -764,7 +759,8 @@ if [ ! -s "\$FILE" ]; then
   exit 1
 fi
 
-(cd /mnt/disks/data/tmp && sha256sum "$(basename "$FILE")") > "$FILE.sha256"
+cd /mnt/disks/data/tmp
+sha256sum "$(basename "$FILE")" > "$FILE.sha256"
 
 # Upload backup
 curl --max-time 300 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
