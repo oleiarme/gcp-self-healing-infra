@@ -833,7 +833,7 @@ if [ -n "\$REMOTE_SUM" ] && [ -n "\$LOCAL_SUM" ] && [ "\$REMOTE_SUM" != "\$LOCAL
 fi
 
 rm -f "\$FILE" "\$FILE.sha256"
-echo "BACKUP_OK \$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "BACKUP_OK \$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 EOF
 chmod +x /home/docker/backup.sh
 
