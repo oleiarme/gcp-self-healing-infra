@@ -558,6 +558,9 @@ if [ "$DB_EXISTS" = "1" ]; then
 fi
 
 if [ "$SKIP_RESTORE" != "true" ]; then
+   
+  touch_progress_safe
+  
   echo "→ Requesting backup list from GCS..."
   # Refresh token before GCS operations (may have expired during long startup)
   TOKEN=$(get_token)
@@ -565,6 +568,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
   
   echo "→ Backup list received (size: ${#BACKUP_INFO})"
+  touch_progress_safe
   # Search for both .sql and .sql.gz backups
   LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep -E '\.(sql|sql\.gz)$' | sort | tail -n 1)
 
@@ -577,16 +581,21 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     if echo "$LATEST_OBJ" | grep -q '\.gz$'; then
       DOWNLOAD_FILE="/home/docker/backup.sql.gz"
     fi
+    touch_progress_safe
     timeout 120 curl -sf -H "Authorization: Bearer $(get_token)" \
-         "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${OBJ_ENC}?alt=media"
-
+      "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${OBJ_ENC}?alt=media" \
+      -o "$DOWNLOAD_FILE"
+    touch_progress_safe
+      
     if [ -s /home/docker/backup.sql ] || [ -s /home/docker/backup.sql.gz ]; then
       # Decompress if gzipped backup
       if [ -s /home/docker/backup.sql.gz ]; then
         echo "Verifying gzip integrity..."
         docker run -i --rm -v /home/docker:/data busybox sh -c 'gunzip -t /data/backup.sql.gz' || { echo "❌ gzip corrupt"; exit 1; }
         echo "Decompressing gzipped backup..."
+        touch_progress_safe
         docker run -i --rm -v /home/docker:/data busybox gunzip -f /data/backup.sql.gz
+        touch_progress_safe
       fi
 
       # Verify checksum if available
@@ -618,11 +627,19 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       "
 
       # Use docker cp instead of pipe — more reliable for large dumps
+      touch_progress_safe
       docker cp /home/docker/backup.sql postgres:/tmp/restore.sql
 
       RESTORE_SIZE=$(stat -c%s /home/docker/backup.sql 2>/dev/null || echo "unknown")
       echo "Restoring DB ($RESTORE_SIZE bytes)..."
-      if ! docker exec postgres psql -U "${db_user}" -d "${db_name}" --single-transaction --set ON_ERROR_STOP=on -f /tmp/restore.sql; then
+
+      touch_progress_safe
+      if ! timeout 600 docker exec postgres psql \
+        -U "${db_user}" \
+        -d "${db_name}" \
+        --single-transaction \
+        --set ON_ERROR_STOP=on \
+        -f /tmp/restore.sql; then
         echo "❌ Restore failed — cleaning DB for next boot retry"
         docker exec postgres psql -U "${db_user}" -d postgres -c "
         SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}';
