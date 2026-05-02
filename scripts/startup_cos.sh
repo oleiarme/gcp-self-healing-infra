@@ -151,7 +151,7 @@ docker info | grep "Docker Root Dir"
 # 3. Health server (AFTER Docker restart)
 # ==========================================
 echo "=== Starting Early Health Check Server (port 8080) ==="
-cat <<'EOF' > /tmp/health_server.py
+cat <<EOF > /tmp/health_server.py
 import http.server
 import socketserver
 import time
@@ -493,7 +493,7 @@ for i in {1..180}; do
       break
     fi
   fi
-  echo "⏳ Waiting for Postgres ($i/60)..."
+  echo "⏳ Waiting for Postgres ($i/180)..."
   sleep 2
 done
 
@@ -632,7 +632,6 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 fi
 
 docker rm -f n8n 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 # ==========================================
 # 10. Start n8n
@@ -693,20 +692,18 @@ fi
 
 
 docker rm -f cloudflared 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
 echo "=== Starting cloudflared ==="
-CF_TOKEN_VALUE=$(cat /dev/shm/n8n-secrets/cf_token)
-
 docker run -d \
   --name cloudflared \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
+  -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
   "$CF_TARGET" \
   tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run \
-  --token "$CF_TOKEN_VALUE"
+  --token "$(cat /dev/shm/n8n-secrets/cf_token)"
 # ==========================================
 # 12. Final health verification
 # ==========================================
