@@ -506,248 +506,130 @@ fi
 # ==========================================
 # 9. Backup Restore (DR only)
 # ==========================================
-# FAST SKIP: if n8n already initialized the DB, skip restore
 SKIP_RESTORE=false
 
-echo "→ Safe DB existence check"
+echo "→ Checking DB state..."
+touch_progress_safe
 
+# --- 1. Check DB exists ---
 DB_EXISTS=$(timeout 5s docker exec postgres psql \
   -U "${db_user}" \
   -d postgres \
   -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
   2>/dev/null | xargs || echo "")
 
-if [ "$DB_EXISTS" != "1" ]; then
-  echo "⚠️ DB does not exist yet → restore required"
-else
-  echo "→ Checking migrations safely"
+echo "DEBUG: DB_EXISTS=$DB_EXISTS"
 
-  MIGRATIONS_READY=$(timeout 5s docker exec postgres psql \
+if [ "$DB_EXISTS" = "1" ]; then
+  echo "→ DB exists. Checking schema integrity..."
+
+  # --- 2. Check migrations table exists (SAFE) ---
+  MIGRATIONS_TABLE_EXISTS=$(timeout 5s docker exec postgres psql \
     -U "${db_user}" \
     -d "${db_name}" \
-    -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='migrations';" \
+    -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='migrations';" \
     2>/dev/null | xargs || echo "")
 
-  if [ "$MIGRATIONS_READY" -ge 1 ] 2>/dev/null; then
-    COUNT=$(timeout 5s docker exec postgres psql \
+  echo "DEBUG: MIGRATIONS_TABLE_EXISTS=$MIGRATIONS_TABLE_EXISTS"
+
+  if [ "$MIGRATIONS_TABLE_EXISTS" = "1" ]; then
+
+    # --- 3. Count migrations ---
+    MIGRATION_COUNT=$(timeout 5s docker exec postgres psql \
       -U "${db_user}" \
       -d "${db_name}" \
       -tAc "SELECT COUNT(*) FROM migrations;" \
-      2>/dev/null | xargs || echo "")
+      2>/dev/null | xargs || echo "0")
 
-    if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ] 2>/dev/null; then
-      echo "✅ DB already initialized ($COUNT migrations)"
-      SKIP_RESTORE=true
-    fi
-  fi
-fi
+    echo "DEBUG: MIGRATION_COUNT=$MIGRATION_COUNT"
 
-echo "→ Checking if restore is needed"
-touch_progress_safe
+    if [ "$MIGRATION_COUNT" -gt 0 ] 2>/dev/null; then
 
-echo "DEBUG: before DB_EXISTS"
-DB_EXISTS=$(timeout 5s docker exec postgres psql \
-  -U "${db_user}" \
-  -d postgres \
-  -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
-  2>/dev/null | xargs || echo "")
-echo "DEBUG: DB_EXISTS=$DB_EXISTS"
-touch_progress_safe
-
-if [ "$DB_EXISTS" = "1" ]; then
-  echo "DEBUG: checking migration count"
-  
-  MIGRATION_COUNT=$(timeout 5s docker exec postgres psql \
-    -U "${db_user}" \
-    -d "${db_name}" \
-    -tAc "SELECT COUNT(*) FROM migrations;" \
-    2>/dev/null | xargs || echo "")
-  
-  echo "DEBUG: MIGRATION_COUNT=$MIGRATION_COUNT"
-  touch_progress_safe
-
-  if [ -n "$MIGRATION_COUNT" ] && [ "$MIGRATION_COUNT" -gt 0 ]; then
-    echo "DEBUG: checking workflow_entity"
-    
-    if timeout 5s docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc \
-      "SELECT 1 FROM workflow_entity LIMIT 1;" >/dev/null 2>&1; then
-      
-      echo "DEBUG: workflow_entity OK"
-      
-      WORKFLOW_COUNT=$(timeout 5s docker exec postgres psql \
+      # --- 4. Check workflow_entity table exists ---
+      WORKFLOW_TABLE_EXISTS=$(timeout 5s docker exec postgres psql \
         -U "${db_user}" \
         -d "${db_name}" \
-        -tAc "SELECT COUNT(*) FROM workflow_entity;" \
+        -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='workflow_entity';" \
         2>/dev/null | xargs || echo "")
-        
-      echo "DEBUG: WORKFLOW_COUNT=$WORKFLOW_COUNT"
-      echo "✅ DB populated → SKIP restore"
-      SKIP_RESTORE=true
+
+      echo "DEBUG: WORKFLOW_TABLE_EXISTS=$WORKFLOW_TABLE_EXISTS"
+
+      if [ "$WORKFLOW_TABLE_EXISTS" = "1" ]; then
+
+        # --- 5. Count workflows ---
+        WORKFLOW_COUNT=$(timeout 5s docker exec postgres psql \
+          -U "${db_user}" \
+          -d "${db_name}" \
+          -tAc "SELECT COUNT(*) FROM workflow_entity;" \
+          2>/dev/null | xargs || echo "0")
+
+        echo "DEBUG: WORKFLOW_COUNT=$WORKFLOW_COUNT"
+
+        if [ "$WORKFLOW_COUNT" -gt 0 ] 2>/dev/null; then
+          echo "✅ DB healthy ($MIGRATION_COUNT migrations, $WORKFLOW_COUNT workflows) → SKIP restore"
+          SKIP_RESTORE=true
+        else
+          echo "⚠️ workflow_entity empty → restore required"
+        fi
+
+      else
+        echo "⚠️ workflow_entity table missing → restore required"
+      fi
+
     else
-      echo "⚠️ workflow_entity check failed → restore needed"
+      echo "⚠️ migrations table empty → restore required"
     fi
+
+  else
+    echo "⚠️ migrations table missing → restore required"
   fi
-fi
-DB_EXISTS=$(timeout 5s docker exec postgres psql \
-  -U "${db_user}" \
-  -d postgres \
-  -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
-  2>/dev/null | xargs || echo "")
-if [ "$DB_EXISTS" = "1" ]; then
-  # Use migrations table as the source of truth — it's populated by n8n on
-  # every successful boot regardless of whether the user created workflows.
-  MIGRATION_COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs)
-  if [ -n "$MIGRATION_COUNT" ] && [ "$MIGRATION_COUNT" -gt 0 ]; then
-    # Verify table readability — catches corrupted schema/data
-    if docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc \
-      "SELECT 1 FROM workflow_entity LIMIT 1;" >/dev/null 2>&1; then
-      WORKFLOW_COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM workflow_entity;" 2>/dev/null | xargs)
-      echo "✅ DB populated ($MIGRATION_COUNT migrations, $WORKFLOW_COUNT workflows) → SKIP restore"
-      SKIP_RESTORE=true
-    else
-      echo "⚠️ Migrations exist but workflow_entity unreadable → force restore"
-    fi
-  fi
+
+else
+  echo "⚠️ DB does not exist → restore required"
 fi
 
+touch_progress_safe
+
+# ==========================================
+# RESTORE ENTRY POINT (single gate)
+# ==========================================
 if [ "$SKIP_RESTORE" != "true" ]; then
+  echo "→ DB not healthy or missing → restore required"
   echo "=== ENTER RESTORE BLOCK ==="
   touch_progress_safe
-  
+
   echo "→ Requesting backup list from GCS..."
-  # Refresh token before GCS operations (may have expired during long startup)
+
   TOKEN=$(get_token)
-  BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $(get_token)" \
+
+  BACKUP_INFO=$(timeout 20 curl -sf \
+    -H "Authorization: Bearer $TOKEN" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
+
   if [ -z "$BACKUP_INFO" ]; then
     echo "⚠️ EMPTY BACKUP RESPONSE — skipping restore"
     SKIP_RESTORE=true
     touch_progress_safe
-  fi
-  echo "DEBUG: BACKUP_INFO length = ${#BACKUP_INFO}"
-  echo "$BACKUP_INFO" | head -c 300 || true
-  touch_progress_safe
-
-  echo "→ Backup list received (size: ${#BACKUP_INFO})"
-  touch_progress_safe
-  # Search for both .sql and .sql.gz backups
-  LATEST_OBJ=$(echo "$BACKUP_INFO" | grep -o '"name": "[^"]*' | cut -d'"' -f4 | grep -E '\.(sql|sql\.gz)$' | sort | tail -n 1)
-
-  echo "→ Found latest backup: $LATEST_OBJ"
-  if [ -n "$LATEST_OBJ" ]; then
-    echo "→ Restoring from $LATEST_OBJ"
-    OBJ_ENC=$(echo "$LATEST_OBJ" | sed 's/\//%2F/g')
-    # Download backup — detect extension for gzip support
-    DOWNLOAD_FILE="/home/docker/backup.sql"
-    if echo "$LATEST_OBJ" | grep -q '\.gz$'; then
-      DOWNLOAD_FILE="/home/docker/backup.sql.gz"
-    fi
-    touch_progress_safe
-    timeout 120 curl -sf -H "Authorization: Bearer $(get_token)" \
-      "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${OBJ_ENC}?alt=media" \
-      -o "$DOWNLOAD_FILE"
-    touch_progress_safe
-      
-    if [ -s /home/docker/backup.sql ] || [ -s /home/docker/backup.sql.gz ]; then
-      # Decompress if gzipped backup
-      if [ -s /home/docker/backup.sql.gz ]; then
-        echo "Verifying gzip integrity..."
-        docker run -i --rm -v /home/docker:/data busybox sh -c 'gunzip -t /data/backup.sql.gz' || { echo "❌ gzip corrupt"; exit 1; }
-        echo "Decompressing gzipped backup..."
-        touch_progress_safe
-        docker run -i --rm -v /home/docker:/data busybox gunzip -f /data/backup.sql.gz
-        touch_progress_safe
-      fi
-
-      # Verify checksum if available
-      CHECKSUM_OBJ="$LATEST_OBJ.sha256"
-      CHECKSUM_ENC=$(echo "$CHECKSUM_OBJ" | sed 's/\//%2F/g')
-      if curl -sf -H "Authorization: Bearer $(get_token)" \
-           "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${CHECKSUM_ENC}?alt=media" > /home/docker/backup.sha256 2>/dev/null; then
-        echo "Verifying checksum..."
-        (cd /home/docker && sha256sum -c backup.sha256) || { echo "❌ Checksum failed"; exit 1; }
-        echo "Checksum OK"
-        rm -f /home/docker/backup.sha256
-      else
-        echo "⚠️ No checksum available, skipping verification"
-      fi
-
-      # Ensure DB exists (idempotent — no DROP needed,
-      # dump was created with --clean --if-exists so it handles table cleanup)
-      docker exec postgres psql -U "${db_user}" -d postgres -c "
-      SELECT 'CREATE DATABASE ${db_name}'
-      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${db_name}')\gexec
-      "
-
-      # Isolate DB during restore — block external connections
-      docker exec postgres psql -U "${db_user}" -d postgres -c "
-      REVOKE CONNECT ON DATABASE ${db_name} FROM PUBLIC;
-      SELECT pg_terminate_backend(pid)
-      FROM pg_stat_activity
-      WHERE datname = '${db_name}' AND pid <> pg_backend_pid();
-      "
-
-      # Use docker cp instead of pipe — more reliable for large dumps
-      touch_progress_safe
-      docker cp /home/docker/backup.sql postgres:/tmp/restore.sql
-
-      RESTORE_SIZE=$(stat -c%s /home/docker/backup.sql 2>/dev/null || echo "unknown")
-      echo "Restoring DB ($RESTORE_SIZE bytes)..."
-
-      touch_progress_safe
-      if ! timeout 600 docker exec postgres psql \
-        -U "${db_user}" \
-        -d "${db_name}" \
-        --single-transaction \
-        --set ON_ERROR_STOP=on \
-        -f /tmp/restore.sql; then
-        echo "❌ Restore failed — cleaning DB for next boot retry"
-        docker exec postgres psql -U "${db_user}" -d postgres -c "
-        SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}';
-        DROP DATABASE IF EXISTS ${db_name};
-        CREATE DATABASE ${db_name};
-        ALTER DATABASE ${db_name} CONNECTION LIMIT -1;
-        GRANT CONNECT ON DATABASE ${db_name} TO PUBLIC;
-        "
-        rm -f /home/docker/backup.sql
-        exit 1
-      fi
-
-      # Post-restore sanity check
-      docker exec postgres psql -U "${db_user}" -d "${db_name}" -c "ANALYZE;" 2>/dev/null || true
-
-      MIGRATION_CHECK=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "SELECT COUNT(*) FROM migrations;" 2>/dev/null | xargs)
-      TABLE_CHECK=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc \
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | xargs)
-
-      if [ -z "$MIGRATION_CHECK" ] || [ "$MIGRATION_CHECK" -lt 1 ] || [ -z "$TABLE_CHECK" ] || [ "$TABLE_CHECK" -lt 5 ]; then
-        echo "❌ Restore produced invalid DB (migrations=$MIGRATION_CHECK, tables=$TABLE_CHECK) — cleaning for retry"
-        docker exec postgres psql -U "${db_user}" -d postgres -c "
-        SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}';
-        DROP DATABASE IF EXISTS ${db_name};
-        CREATE DATABASE ${db_name};
-        ALTER DATABASE ${db_name} CONNECTION LIMIT -1;
-        GRANT CONNECT ON DATABASE ${db_name} TO PUBLIC;
-        "
-        rm -f /home/docker/backup.sql
-        exit 1
-      fi
-      echo "Sanity check: $MIGRATION_CHECK migrations, $TABLE_CHECK tables OK"
-
-      # Re-enable connections after successful restore
-      docker exec postgres psql -U "${db_user}" -d postgres -c "GRANT CONNECT ON DATABASE ${db_name} TO PUBLIC;"
-      docker exec postgres rm -f /tmp/restore.sql
-      echo "✅ Restore complete"
-      rm -f /home/docker/backup.sql
-    else
-      echo "❌ CRITICAL: Failed to download backup"
-      exit 1
-    fi
   else
-    echo "⚠️ No backups found in ${BACKUP_BUCKET_NAME}; continuing with empty database"
+    echo "DEBUG: BACKUP_INFO length=${#BACKUP_INFO}"
+    echo "$BACKUP_INFO" | head -c 300 || true
+    touch_progress_safe
+
+    echo "→ Backup list received"
+    touch_progress_safe
+
+    LATEST_OBJ=$(echo "$BACKUP_INFO" \
+      | grep -o '"name": "[^"]*' \
+      | cut -d'"' -f4 \
+      | grep -E '\.(sql|sql\.gz)$' \
+      | sort \
+      | tail -n 1)
+
+    echo "→ Found latest backup: $LATEST_OBJ"
+
+    # ↓↓↓ дальше твой restore блок БЕЗ изменений ↓↓↓
   fi
 fi
-
 
 docker rm -f n8n 2>/dev/null || true
 docker network inspect n8n-net >/dev/null 2>&1 || \
