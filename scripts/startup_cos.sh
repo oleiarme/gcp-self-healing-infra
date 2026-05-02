@@ -27,12 +27,26 @@ get_token() {
 
 get_secret() {
   local SECRET_NAME=$1
+  local PROJECT_ID=$(get_metadata "project/project-id")
+
+  if [ -z "$PROJECT_ID" ]; then
+    echo "❌ project_id is empty"
+    return 1
+  fi
+
   local TOKEN=$(get_token)
   local RAW
-  RAW=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-       "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/$SECRET_NAME/versions/latest:access")
-  echo "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p' | base64 -d
-}
+  RAW=$(curl -sf -H "Authorization: Bearer $(get_token)" \
+       "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/$SECRET_NAME/versions/latest:access"
+  DATA=$(echo "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p')
+
+  if [ -z "$DATA" ]; then
+    echo "❌ Secret $SECRET_NAME is empty or invalid"
+    return 1
+  fi
+
+  echo "$DATA" | base64 -d
+} 
 
 # ==========================================
 # 1. Setup Swap (e2-micro needs it)
@@ -403,7 +417,7 @@ docker run -d \
 
 echo "=== Waiting for Postgres ==="
 READY=false
-for i in {1..60}; do
+for i in {1..180}; do
   if docker exec postgres pg_isready -U "${db_user}" >/dev/null 2>&1; then
     if docker exec postgres psql -U "${db_user}" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
@@ -483,7 +497,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   echo "→ Requesting backup list from GCS..."
   # Refresh token before GCS operations (may have expired during long startup)
   TOKEN=$(get_token)
-  BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $TOKEN" \
+  BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $(get_token)" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
   
   echo "→ Backup list received (size: $${#BACKUP_INFO})"
@@ -499,7 +513,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
     if echo "$LATEST_OBJ" | grep -q '\.gz$'; then
       DOWNLOAD_FILE="/home/docker/backup.sql.gz"
     fi
-    timeout 120 curl -sf -H "Authorization: Bearer $TOKEN" \
+    timeout 120 curl -sf -H "Authorization: Bearer $(get_token)" \
          "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${OBJ_ENC}?alt=media" > "$DOWNLOAD_FILE"
 
     if [ -s /home/docker/backup.sql ] || [ -s /home/docker/backup.sql.gz ]; then
@@ -514,7 +528,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       # Verify checksum if available
       CHECKSUM_OBJ="$LATEST_OBJ.sha256"
       CHECKSUM_ENC=$(echo "$CHECKSUM_OBJ" | sed 's/\//%2F/g')
-      if curl -sf -H "Authorization: Bearer $TOKEN" \
+      if curl -sf -H "Authorization: Bearer $(get_token)" \
            "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${CHECKSUM_ENC}?alt=media" > /home/docker/backup.sha256 2>/dev/null; then
         echo "Verifying checksum..."
         (cd /home/docker && sha256sum -c backup.sha256) || { echo "❌ Checksum failed"; exit 1; }
@@ -627,6 +641,7 @@ docker run -d \
   -e N8N_DIAGNOSTICS_ENABLED=false \
   -e N8N_METRICS_ENABLED=false \
   -e N8N_PORT=5678 \
+  -e NODE_OPTIONS="--max-old-space-size=256" \
   -e N8N_LISTEN_ADDRESS=0.0.0.0 \
   -e DB_POSTGRESDB_CONNECTION_TIMEOUT=60000 \
   "$N8N_TARGET"
@@ -707,7 +722,8 @@ cat <<EOF > /home/docker/backup.sh
 set -e
 TOKEN=\$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
-FILE="/tmp/n8n-\$${TIMESTAMP}.sql.gz"
+mkdir -p /mnt/disks/data/tmp
+FILE="/mnt/disks/data/tmp/n8n-${TIMESTAMP}.sql.gz"
 
 COUNT=\$(docker exec postgres psql -U ${db_user} -d ${db_name} -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
 if [ "\$COUNT" -lt 1 ]; then
@@ -739,7 +755,7 @@ if [ ! -s "\$FILE" ]; then
   exit 1
 fi
 
-(cd /tmp && sha256sum "\$(basename "\$FILE")") > "\$FILE.sha256"
+(cd /mnt/disks/data/tmp && sha256sum "$(basename "$FILE")") > "$FILE.sha256"
 
 # Upload backup
 curl --max-time 300 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
@@ -789,4 +805,9 @@ systemctl daemon-reload
 systemctl enable --now n8n-backup.timer
 
 echo "=== ALL DONE ==="
+if [ "$HEALTHY" != "true" ]; then
+  echo "❌ Instance not healthy → forcing recreate"
+  exit 1
+fi
+
 exit 0
