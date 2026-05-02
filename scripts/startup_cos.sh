@@ -2,6 +2,7 @@
 set -e
 set -o pipefail
 set -u
+trap 'rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true' EXIT
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
 echo "Starting n8n on COS..."
@@ -94,19 +95,7 @@ get_secret() {
   echo "$DATA" | base64 -d
 } 
 
-# ==========================================
-# 1. Setup Swap (e2-micro needs it)
-# ==========================================
-echo "=== Setup Swap ==="
-if [ ! -f /var/lib/swapfile ]; then
-  fallocate -l 4G /var/lib/swapfile
-  chmod 600 /var/lib/swapfile
-  mkswap /var/lib/swapfile
-fi
-if ! swapon --show | grep -q swapfile; then
-  swapon /var/lib/swapfile
-fi
-sysctl -w vm.swappiness=10
+
 
 
 mkdir -p /mnt/stateful_partition/docker
@@ -330,6 +319,17 @@ mount -o discard,defaults "$DATA_DISK" /mnt/disks/data
 
 mkdir -p /mnt/disks/data/postgres
 chown -R 70:70 /mnt/disks/data/postgres
+echo "=== Setup Swap on persistent disk ==="
+SWAP_FILE="/mnt/disks/data/swapfile"
+if [ ! -f "$SWAP_FILE" ]; then
+  fallocate -l 2G "$SWAP_FILE"
+  chmod 600 "$SWAP_FILE"
+  mkswap "$SWAP_FILE"
+fi
+if ! swapon --show | grep -q "$SWAP_FILE"; then
+  swapon "$SWAP_FILE"
+fi
+sysctl -w vm.swappiness=10
 mkdir -p /home/docker/n8n
 
 # ==========================================
@@ -464,7 +464,7 @@ done
 docker rm -f postgres 2>/dev/null || true 
 echo "=== Ensure Docker network ==="
 docker network inspect n8n-net >/dev/null 2>&1 || \
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
 
 echo "=== Starting Postgres ==="
 docker run -d \
@@ -627,12 +627,44 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 
     echo "→ Found latest backup: $LATEST_OBJ"
 
-    # ↓↓↓ дальше твой restore блок БЕЗ изменений ↓↓↓
+    if [ -z "$LATEST_OBJ" ]; then
+      echo "⚠️ No backup files found in GCS → skipping restore"
+    else
+      echo "→ Downloading backup: $LATEST_OBJ"
+      ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
+      RESTORE_FILE="/mnt/disks/data/tmp/restore.sql.gz"
+      mkdir -p /mnt/disks/data/tmp
+
+      TOKEN=$(get_token)
+      curl -sf --max-time 600 \
+        -H "Authorization: Bearer $TOKEN" \
+        "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_OBJ}?alt=media" \
+        -o "$RESTORE_FILE"
+
+      if [ ! -s "$RESTORE_FILE" ]; then
+        echo "❌ Downloaded backup is empty"
+        exit 1
+      fi
+
+      echo "→ Restoring backup into Postgres..."
+      gunzip -c "$RESTORE_FILE" | docker exec -i postgres psql \
+        -U "${db_user}" \
+        -d "${db_name}" \
+        --set ON_ERROR_STOP=on
+
+      if [ $? -ne 0 ]; then
+        echo "❌ Restore failed"
+        exit 1
+      fi
+
+      rm -f "$RESTORE_FILE"
+      echo "✅ Restore completed"
+    fi
   fi
 fi
 
 docker rm -f n8n 2>/dev/null || true
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
 # ==========================================
 # 10. Start n8n
 # ==========================================
@@ -641,6 +673,8 @@ docker run -d \
   --name n8n \
   --network n8n-net \
   --restart unless-stopped \
+  --memory 400m \
+  --memory-swap 600m \
   -p 127.0.0.1:5678:5678 \
   -v /dev/shm/n8n-secrets:/run/secrets:ro \
   -e DB_TYPE=postgresdb \
@@ -692,7 +726,7 @@ fi
 
 
 docker rm -f cloudflared 2>/dev/null || true
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
 
 echo "=== Starting cloudflared ==="
 docker run -d \
@@ -700,10 +734,9 @@ docker run -d \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
-  -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
+  -e TUNNEL_TOKEN="$(cat /dev/shm/n8n-secrets/cf_token)" \
   "$CF_TARGET" \
-  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run \
-  --token "$(cat /dev/shm/n8n-secrets/cf_token)"
+  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run
 # ==========================================
 # 12. Final health verification
 # ==========================================
@@ -764,7 +797,7 @@ fi
 # Disk pressure check — abort if <500MB free in /tmp
 AVAIL_KB=\$(df --output=avail /tmp | tail -1 | xargs)
 if [ "\$AVAIL_KB" -lt 512000 ]; then
-  echo "❌ SKIP backup: insufficient disk space (\$${AVAIL_KB}KB free in /tmp)"
+  echo "❌ SKIP backup: insufficient disk space (\${AVAIL_KB}KB free in /tmp)"
   exit 1
 fi
 
@@ -773,37 +806,54 @@ BACKUP_START=\$(date +%s)
 docker exec postgres psql -U ${db_user} -d ${db_name} -c "CHECKPOINT;" 2>/dev/null || true
 timeout 300 docker exec postgres pg_dump -U ${db_user} --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 ${db_name} | gzip > "\$FILE"
 BACKUP_DURATION=\$(( \$(date +%s) - BACKUP_START ))
-echo "Backup duration: \$${BACKUP_DURATION}s"
+echo "Backup duration: \${BACKUP_DURATION}s"
 if [ ! -s "\$FILE" ]; then
   echo "❌ EMPTY BACKUP"
   exit 1
 fi
 
 cd /mnt/disks/data/tmp
-sha256sum "$(basename "$FILE")" > "$FILE.sha256"
+sha256sum "\$(basename \"\$FILE\")" > "\$FILE.sha256"
 
 # Upload backup
 curl --max-time 300 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
      -H "Content-Type: application/octet-stream" \
      --data-binary @"\$FILE" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz"
+     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\${TIMESTAMP}.sql.gz"
 
 # Upload checksum
 curl --max-time 60 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
      -H "Content-Type: text/plain" \
      --data-binary @"\$FILE.sha256" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz.sha256"
+     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\${TIMESTAMP}.sql.gz.sha256"
 
 # Verify upload integrity — read back checksum from GCS and compare with local
 LOCAL_SUM=\$(cat "\$FILE.sha256" 2>/dev/null || true)
 REMOTE_SUM=\$(curl --max-time 60 -sf -H "Authorization: Bearer \$TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/n8n%2Fn8n-\$${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
+  "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/n8n%2Fn8n-\${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
 if [ -n "\$REMOTE_SUM" ] && [ -n "\$LOCAL_SUM" ] && [ "\$REMOTE_SUM" != "\$LOCAL_SUM" ]; then
   echo "❌ Checksum mismatch after upload — backup may be corrupt"
   exit 1
 fi
 
 rm -f "\$FILE" "\$FILE.sha256"
+CUTOFF_DATE=\$(date -d '7 days ago' +%Y%m%d)
+OLD_BACKUPS=\$(curl -sf -H "Authorization: Bearer \$TOKEN" \
+  "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-" \
+  | grep -o '"name": "[^"]*' | cut -d'"' -f4 \
+  | grep -E '\.(sql\.gz|sha256)$' || true)
+  
+
+# Фильтруем по дате имени файла
+while IFS= read -r obj; do
+  FILE_DATE=\$(echo "\$obj" | grep -o '[0-9]\{8\}' | head -1)
+  if [ -n "\$FILE_DATE" ] && [ "\$FILE_DATE" -lt "\$CUTOFF_DATE" ]; then
+    ENCODED=\$(python3 -c "import urllib.parse; print(urllib.parse.quote('\$obj', safe=''))")
+    curl -sf -X DELETE -H "Authorization: Bearer \$TOKEN" \
+      "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/\${ENCODED}" || true
+    echo "Deleted old backup: \$obj"
+  fi
+done <<< "\$OLD_BACKUPS"
 echo "BACKUP_OK \$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 EOF
 chmod +x /home/docker/backup.sh
@@ -834,5 +884,7 @@ if [ "$HEALTHY" != "true" ]; then
   echo "❌ Instance not healthy → forcing recreate"
   exit 1
 fi
+
+
 
 exit 0
