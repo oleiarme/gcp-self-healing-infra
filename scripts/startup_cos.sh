@@ -264,7 +264,7 @@ mkdir -p /home/docker/n8n
 # ==========================================
 docker network create n8n-net || true
 
-# === Disk check (COS-aware) ===
+# === Disk check (COS-aware) -- ===
 
 # Try to get Docker root
 DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
@@ -303,10 +303,26 @@ pull_with_fallback() {
   local selected="$primary"
 
   echo "→ Pulling $name from Artifact Registry: $primary" >&2
-  if ! docker pull "$primary" >&2; then
-    echo "⚠️ $name Artifact Registry pull failed, falling back to public image" >&2
-    selected="$fallback"
-    docker pull "$selected" >&2
+
+  for i in 1 2 3; do
+    if timeout 60 docker pull "$primary" >&2; then
+      echo "✅ Pulled $name from AR (attempt $i)" >&2
+      printf "%s" "$primary"
+      return 0
+    fi
+
+    echo "⚠️ Pull failed (attempt $i), cleaning broken layers..." >&2
+    docker image rm -f "$primary" >/dev/null 2>&1 || true
+    docker builder prune -af >/dev/null 2>&1 || true
+    sleep 3
+  done
+
+  echo "⚠️ $name AR pull failed, falling back to public image" >&2
+  selected="$fallback"
+
+  if ! timeout 60 docker pull "$selected" >&2; then
+    echo "❌ CRITICAL: fallback pull also failed" >&2
+    exit 1
   fi
 
   printf "%s" "$selected"
