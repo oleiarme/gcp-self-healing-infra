@@ -365,11 +365,16 @@ fi
 echo "=== Docker login via access token ==="
 TOKEN=$(get_token)
 
-AR_DOMAIN=$(echo "${n8n_ar_image}" | cut -d'/' -f1)
+if [ -n "${n8n_ar_image:-}" ]; then
+  AR_DOMAIN=$(echo "${n8n_ar_image}" | cut -d'/' -f1)
 
-echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "https://${AR_DOMAIN}" || {  echo "⚠️ AR login failed, fallback will be used"
-}
-echo "✅ Docker will use gcr credential helper"
+  echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "https://${AR_DOMAIN}" || {
+    echo "⚠️ AR login failed, fallback will be used"
+  }
+else
+  echo "⚠️ n8n_ar_image not set → skipping AR login"
+fi
+
 
 echo "=== Pull Docker images ==="
 pull_with_fallback() {
