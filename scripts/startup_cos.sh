@@ -69,8 +69,8 @@ mkdir -p /mnt/stateful_partition/docker
 cat <<EOF > /etc/docker/daemon.json
 {
   "data-root": "/mnt/stateful_partition/docker",
-  "registry-mirrors": ["https://mirror.gcr.io"],
-  "max-concurrent-downloads": 1,
+  "mtu": 1460,
+  "max-concurrent-downloads": 3,
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
@@ -93,6 +93,7 @@ if [ ! -f "$DOCKER_READY_FILE" ]; then
 
   sleep 5
   touch "$DOCKER_READY_FILE"
+  ip link set dev eth0 mtu 1460 || true
 else
   echo "=== Docker already initialized, skipping restart ==="
 fi
@@ -205,7 +206,7 @@ docker rm -f health-server 2>/dev/null || true
 
 docker run -d --name health-server --restart always --network host \
   -v /tmp/health_server.py:/health_server.py:ro \
-  mirror.gcr.io/python:3-alpine python3 /health_server.py
+  docker.io/library/python:3-alpine /health_server.py
 
 sleep 2
 docker ps | grep health-server || {
@@ -289,7 +290,7 @@ mkdir -p /home/docker/n8n
 # ==========================================
 # 7. Docker Network + Image Pull
 # ==========================================
-docker network create n8n-net || true
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
 
 # === Disk check (COS-aware) -- ===
 
@@ -323,8 +324,9 @@ fi
 echo "=== Docker login via access token ==="
 TOKEN=$(get_token)
 
-echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev || {
-  echo "⚠️ AR login failed, fallback will be used"
+AR_DOMAIN=$(echo "${n8n_ar_image}" | cut -d'/' -f1)
+
+echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "https://${AR_DOMAIN}" || {  echo "⚠️ AR login failed, fallback will be used"
 }
 echo "✅ Docker will use gcr credential helper"
 
