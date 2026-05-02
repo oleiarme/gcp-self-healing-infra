@@ -546,7 +546,7 @@ if [ "$DB_EXISTS" = "1" ]; then
     if [ "$MIGRATION_COUNT" -gt 0 ] 2>/dev/null; then
 
       # --- 4. Check workflow_entity table exists ---
-      WORKFLOW_TABLE_EXISTS=$(timeout 5s docker exec postgres psql \
+      WORKFLOW_TABLE_EXISTS=$(timeout 15s docker exec postgres psql \
         -U "${db_user}" \
         -d "${db_name}" \
         -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='workflow_entity';" \
@@ -697,15 +697,16 @@ docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
 echo "=== Starting cloudflared ==="
+CF_TOKEN_VALUE=$(cat /dev/shm/n8n-secrets/cf_token)
+
 docker run -d \
   --name cloudflared \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
-  -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
   "$CF_TARGET" \
   tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run \
-  --token "$(cat /run/secrets/cf_token)"
+  --token "$CF_TOKEN_VALUE"
 # ==========================================
 # 12. Final health verification
 # ==========================================
@@ -743,13 +744,13 @@ fi
 # 13. Backup via systemd timer
 # ==========================================
 echo "=== Setup Backup Timer ==="
-cat <<'EOF' > /home/docker/backup.sh
+cat <<EOF > /home/docker/backup.sh
 #!/bin/bash
 set -e
 TOKEN=\$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
 mkdir -p /mnt/disks/data/tmp
-FILE="/mnt/disks/data/tmp/n8n-${TIMESTAMP}.sql.gz"
+FILE="/mnt/disks/data/tmp/n8n-\${TIMESTAMP}.sql.gz"
 
 COUNT=\$(docker exec postgres psql -U ${db_user} -d ${db_name} -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
 if [ "\$COUNT" -lt 1 ]; then
