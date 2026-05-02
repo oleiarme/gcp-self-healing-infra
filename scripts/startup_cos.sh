@@ -7,6 +7,47 @@ exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 echo "Starting n8n on COS..."
 
 # ==========================================
+# CONFIG FROM GCP METADATA
+# ==========================================
+get_custom_meta() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1"
+}
+
+get_required_meta() {
+  local key="$1"
+  local val
+  val=$(get_custom_meta "$key")
+
+  if [ -z "$val" ]; then
+    echo "❌ Missing metadata: $key"
+    exit 1
+  fi
+
+  echo "$val"
+}
+
+echo "=== Loading Configuration ==="
+
+db_user=$(get_required_meta "config_db_user")
+db_name=$(get_required_meta "config_db_name")
+DB_SECRET_NAME=$(get_required_meta "config_db_secret")
+N8N_KEY_SECRET_NAME=$(get_required_meta "config_n8n_key_secret")
+CF_TUNNEL_SECRET_NAME=$(get_required_meta "config_cf_token_secret")
+
+n8n_image=$(get_required_meta "config_n8n_image")
+cloudflared_image=$(get_required_meta "config_cloudflared_image")
+
+n8n_ar_image=$(get_required_meta "config_n8n_ar_image")
+cloudflared_ar_image=$(get_required_meta "config_cf_ar_image")
+
+db_port=$(get_required_meta "config_db_port")
+n8n_public_host=$(get_required_meta "config_n8n_host")
+BACKUP_BUCKET_NAME=$(get_required_meta "config_backup_bucket")
+
+echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
+
+# ==========================================
 # 0. Utility functions
 # ==========================================
 retry() {
@@ -206,7 +247,7 @@ docker rm -f health-server 2>/dev/null || true
 
 docker run -d --name health-server --restart always --network host \
   -v /tmp/health_server.py:/health_server.py:ro \
-  docker.io/library/python:3-alpine /health_server.py
+  docker.io/library/python:3-alpine python3 /health_server.py
 
 sleep 2
 docker ps | grep health-server || {
@@ -400,7 +441,8 @@ done
 
 docker rm -f postgres 2>/dev/null || true 
 echo "=== Ensure Docker network ==="
-docker network inspect n8n-net >/dev/null 2>&1 || docker network create n8n-net
+docker network inspect n8n-net >/dev/null 2>&1 || \
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
 echo "=== Starting Postgres ==="
 docker run -d \
@@ -612,7 +654,8 @@ fi
 
 
 docker rm -f n8n 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || docker network create n8n-net
+docker network inspect n8n-net >/dev/null 2>&1 || \
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 # ==========================================
 # 10. Start n8n
 # ==========================================
@@ -672,7 +715,8 @@ fi
 
 
 docker rm -f cloudflared 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || docker network create n8n-net
+docker network inspect n8n-net >/dev/null 2>&1 || \
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
 echo "=== Starting cloudflared ==="
 docker run -d \
