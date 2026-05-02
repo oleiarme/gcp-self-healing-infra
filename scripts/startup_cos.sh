@@ -593,9 +593,7 @@ touch_progress_safe
 # ==========================================
 # RESTORE ENTRY POINT (single gate)
 # ==========================================
-Да, меняем весь блок целиком. Вот финальная версия — просто замени всё от if [ "$SKIP_RESTORE" != "true" ]; then до закрывающего fi:
 
-bash
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "→ DB not healthy or missing → restore required"
   echo "=== ENTER RESTORE BLOCK ==="
