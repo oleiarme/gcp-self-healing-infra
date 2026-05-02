@@ -79,8 +79,8 @@ get_secret() {
   local TOKEN=$(get_token)
   local RAW
   RAW=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
-       "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/$SECRET_NAME/versions/latest:access"
-  DATA=$(echo "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p')
+     "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/${SECRET_NAME}/versions/latest:access")
+  DATA=$(printf '%s' "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p')
 
   if [ -z "$DATA" ]; then
     echo "❌ Secret $SECRET_NAME is empty or invalid"
