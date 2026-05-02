@@ -651,7 +651,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       REMOTE_SUM=$(curl -sf --max-time 30 \
         -H "Authorization: Bearer $TOKEN" \
         "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_CS}?alt=media" \
-        2>/dev/null || true)
+        2>/dev/null | awk '{print $1}' || true)
 
       if [ -n "$REMOTE_SUM" ]; then
         LOCAL_SUM=$(sha256sum "$RESTORE_FILE" | awk '{print $1}')
