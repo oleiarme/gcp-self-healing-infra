@@ -543,6 +543,51 @@ else
 fi
 
 echo "→ Checking if restore is needed"
+touch_progress_safe
+
+echo "DEBUG: before DB_EXISTS"
+DB_EXISTS=$(timeout 5s docker exec postgres psql \
+  -U "${db_user}" \
+  -d postgres \
+  -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
+  2>/dev/null | xargs || echo "")
+echo "DEBUG: DB_EXISTS=$DB_EXISTS"
+touch_progress_safe
+
+if [ "$DB_EXISTS" = "1" ]; then
+  echo "DEBUG: checking migration count"
+  
+  MIGRATION_COUNT=$(timeout 5s docker exec postgres psql \
+    -U "${db_user}" \
+    -d "${db_name}" \
+    -tAc "SELECT COUNT(*) FROM migrations;" \
+    2>/dev/null | xargs || echo "")
+  
+  echo "DEBUG: MIGRATION_COUNT=$MIGRATION_COUNT"
+  touch_progress_safe
+
+  if [ -n "$MIGRATION_COUNT" ] && [ "$MIGRATION_COUNT" -gt 0 ]; then
+    echo "DEBUG: checking workflow_entity"
+    
+    if timeout 5s docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc \
+      "SELECT 1 FROM workflow_entity LIMIT 1;" >/dev/null 2>&1; then
+      
+      echo "DEBUG: workflow_entity OK"
+      
+      WORKFLOW_COUNT=$(timeout 5s docker exec postgres psql \
+        -U "${db_user}" \
+        -d "${db_name}" \
+        -tAc "SELECT COUNT(*) FROM workflow_entity;" \
+        2>/dev/null | xargs || echo "")
+        
+      echo "DEBUG: WORKFLOW_COUNT=$WORKFLOW_COUNT"
+      echo "✅ DB populated → SKIP restore"
+      SKIP_RESTORE=true
+    else
+      echo "⚠️ workflow_entity check failed → restore needed"
+    fi
+  fi
+fi
 DB_EXISTS=$(timeout 5s docker exec postgres psql \
   -U "${db_user}" \
   -d postgres \
