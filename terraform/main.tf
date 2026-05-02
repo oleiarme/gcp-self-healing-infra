@@ -386,7 +386,7 @@ resource "google_compute_instance_template" "tpl" {
     google_secret_manager_secret.n8n_key,
     google_secret_manager_secret.cf_token
   ]
-  name = "n8n-${substr(local.startup_hash, 0, 6)}"
+  name = "n8n-"
   machine_type = "e2-micro"
   tags         = ["n8n"]
 

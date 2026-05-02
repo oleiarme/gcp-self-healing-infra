@@ -163,8 +163,8 @@ jobs:
           TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
 
       - name: Terraform Apply
-        run: terraform apply -replace=google_compute_instance_template.tpl -auto-approve
-        #run: terraform apply -auto-approve tfplan
+        #run: terraform apply -replace=google_compute_instance_template.tpl -auto-approve
+        run: terraform apply -auto-approve tfplan
         continue-on-error: false
         env:
           TF_VAR_CF_TUNNEL_TOKEN: ${{ secrets.TF_VAR_CF_TUNNEL_TOKEN }}
