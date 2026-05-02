@@ -48,35 +48,34 @@ if ! swapon --show | grep -q swapfile; then
 fi
 sysctl -w vm.swappiness=10
 
-# ==========================================
-# 2. Docker registry mirror (BEFORE health server!)
-# ==========================================
-echo "=== Setup Docker Registry Mirror ==="
-mkdir -p /etc/docker
-cat <<DOCKEREOF > /etc/docker/daemon.json
+
+mkdir -p /mnt/stateful_partition/docker
+
+cat <<EOF > /etc/docker/daemon.json
 {
+  "data-root": "/mnt/stateful_partition/docker",
   "registry-mirrors": ["https://mirror.gcr.io"],
+  "max-concurrent-downloads": 1,
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
     "max-file": "3"
   }
 }
-DOCKEREOF
-systemctl daemon-reload
+EOF
+
+systemctl daemon-reexec
 systemctl restart docker
 
-echo "=== Recreate Docker network after restart ==="
-docker network create n8n-net || true
-
-# Wait for Docker to be ready after restart
+# wait docker stable
 for i in {1..30}; do
-  if docker info >/dev/null 2>&1; then
-    echo "✅ Docker is ready"
-    break
-  fi
+  docker info >/dev/null 2>&1 && break
   sleep 2
 done
+
+docker info | grep "Docker Root Dir"
+
+
 
 # ==========================================
 # 3. Health server (AFTER Docker restart)
@@ -295,6 +294,12 @@ fi
 echo "=== Pre-clean Docker ==="
 docker system prune -af --volumes || true
 
+echo "=== Auth to Artifact Registry ==="
+
+ACCESS_TOKEN=$(get_token)
+
+echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken \
+  --password-stdin https://us-central1-docker.pkg.dev
 echo "=== Pull Docker images ==="
 pull_with_fallback() {
   local name="$1"
@@ -303,7 +308,7 @@ pull_with_fallback() {
   local selected="$primary"
 
   echo "→ Pulling $name from Artifact Registry: $primary" >&2
-
+  
   for i in 1 2 3; do
     if timeout 60 docker pull "$primary" >&2; then
       echo "✅ Pulled $name from AR (attempt $i)" >&2
