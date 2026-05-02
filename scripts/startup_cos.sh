@@ -50,6 +50,10 @@ echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
 # ==========================================
 # 0. Utility functions
 # ==========================================
+
+touch_progress_safe() {
+  echo "$(date +%s)" > /tmp/health_progress 2>/dev/null || true
+}
 retry() {
   for i in {1..5}; do
     "$@" && return 0
@@ -539,7 +543,11 @@ else
 fi
 
 echo "→ Checking if restore is needed"
-DB_EXISTS=$(docker exec postgres psql -U "${db_user}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" | xargs)
+DB_EXISTS=$(timeout 5s docker exec postgres psql \
+  -U "${db_user}" \
+  -d postgres \
+  -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
+  2>/dev/null | xargs || echo "")
 if [ "$DB_EXISTS" = "1" ]; then
   # Use migrations table as the source of truth — it's populated by n8n on
   # every successful boot regardless of whether the user created workflows.
@@ -558,7 +566,7 @@ if [ "$DB_EXISTS" = "1" ]; then
 fi
 
 if [ "$SKIP_RESTORE" != "true" ]; then
-   
+  echo "=== ENTER RESTORE BLOCK ==="
   touch_progress_safe
   
   echo "→ Requesting backup list from GCS..."
@@ -566,7 +574,15 @@ if [ "$SKIP_RESTORE" != "true" ]; then
   TOKEN=$(get_token)
   BACKUP_INFO=$(timeout 20 curl -sf -H "Authorization: Bearer $(get_token)" \
     "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
-  
+  if [ -z "$BACKUP_INFO" ]; then
+    echo "⚠️ EMPTY BACKUP RESPONSE — skipping restore"
+    SKIP_RESTORE=true
+    touch_progress_safe
+  fi
+  echo "DEBUG: BACKUP_INFO length = ${#BACKUP_INFO}"
+  echo "$BACKUP_INFO" | head -c 300 || true
+  touch_progress_safe
+
   echo "→ Backup list received (size: ${#BACKUP_INFO})"
   touch_progress_safe
   # Search for both .sql and .sql.gz backups
