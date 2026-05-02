@@ -454,7 +454,7 @@ config_cf_ar_image       = local.cf_ar_image
 
 config_db_port           = "5432"
 config_n8n_host          = var.n8n_public_host
-config_backup_bucket     = google_storage_bucket.backup.name
+config_backup_bucket     = "n8n-backups-idealist426118"
     startup-script-hash = local.startup_hash
     
   }
