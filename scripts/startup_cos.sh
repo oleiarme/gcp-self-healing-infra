@@ -336,7 +336,7 @@ pull_with_fallback() {
   echo "→ Pulling $name from Artifact Registry: $primary" >&2
   
   for i in 1 2 3; do
-    if timeout 60 docker pull "$primary" >&2; then
+    if timeout 300 docker pull "$primary" >&2; then
       echo "✅ Pulled $name from AR (attempt $i)" >&2
       printf "%s" "$primary"
       return 0
@@ -351,7 +351,7 @@ pull_with_fallback() {
   echo "⚠️ $name AR pull failed, falling back to public image" >&2
   selected="$fallback"
 
-  if ! timeout 60 docker pull "$selected" >&2; then
+  if ! timeout 300 docker pull "$selected" >&2; then
     echo "❌ CRITICAL: fallback pull also failed" >&2
     exit 1
   fi
@@ -651,7 +651,7 @@ docker run -d \
 # ==========================================
 echo "=== Waiting for n8n ==="
 N8N_READY=false
-for i in {1..60}; do
+for i in {1..180}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     echo "✅ n8n is ready"
     N8N_READY=true
