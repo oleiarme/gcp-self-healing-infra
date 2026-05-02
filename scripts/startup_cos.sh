@@ -2,7 +2,7 @@
 set -e
 set -o pipefail
 set -u
-trap 'rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true' EXIT
+
 exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
 
 echo "Starting n8n on COS..."
@@ -911,12 +911,13 @@ TMREOF
 systemctl daemon-reload || true
 systemctl enable --now n8n-backup.timer || echo "⚠️ systemd timer skipped"
 
+
+
 echo "=== ALL DONE ==="
 if [ "$HEALTHY" != "true" ]; then
   echo "❌ Instance not healthy → forcing recreate"
   exit 1
 fi
-
-
+rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true
 
 exit 0
