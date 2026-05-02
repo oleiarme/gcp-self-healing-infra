@@ -113,7 +113,7 @@ import socket
 import urllib.request
 
 START_TIME = time.time()
-BOOTSTRAP_WINDOW = 1200
+BOOTSTRAP_WINDOW = 1800
 STALL_TIMEOUT = 300
 MAX_BOOT_TIME = 1800
 LAST_PROGRESS_FILE = '/tmp/health_progress'
@@ -150,6 +150,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         uptime = time.time() - START_TIME
+
+        
+        if uptime < BOOTSTRAP_WINDOW:
+            touch_progress()
 
         try:
             n8n_ok = check_http("http://127.0.0.1:5678/healthz")
@@ -314,12 +318,6 @@ if [ "$AVAIL_KB" -lt 1048576 ]; then
   echo "❌ CRITICAL: Still low disk space ($((AVAIL_KB/1024))MB)"
   exit 1
 fi
-
-echo "=== Pre-clean Docker ==="
-docker system prune -af --volumes || true
-
-
-
 
 
 echo "=== Docker login via access token ==="
@@ -518,7 +516,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       DOWNLOAD_FILE="/home/docker/backup.sql.gz"
     fi
     timeout 120 curl -sf -H "Authorization: Bearer $(get_token)" \
-         "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${OBJ_ENC}?alt=media" > "$DOWNLOAD_FILE"
+         "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${OBJ_ENC}?alt=media"
 
     if [ -s /home/docker/backup.sql ] || [ -s /home/docker/backup.sql.gz ]; then
       # Decompress if gzipped backup
@@ -533,7 +531,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       CHECKSUM_OBJ="$LATEST_OBJ.sha256"
       CHECKSUM_ENC=$(echo "$CHECKSUM_OBJ" | sed 's/\//%2F/g')
       if curl -sf -H "Authorization: Bearer $(get_token)" \
-           "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/$${CHECKSUM_ENC}?alt=media" > /home/docker/backup.sha256 2>/dev/null; then
+           "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${CHECKSUM_ENC}?alt=media" > /home/docker/backup.sha256 2>/dev/null; then
         echo "Verifying checksum..."
         (cd /home/docker && sha256sum -c backup.sha256) || { echo "❌ Checksum failed"; exit 1; }
         echo "Checksum OK"
@@ -766,13 +764,13 @@ sha256sum "$(basename "$FILE")" > "$FILE.sha256"
 curl --max-time 300 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
      -H "Content-Type: application/octet-stream" \
      --data-binary @"\$FILE" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\$${TIMESTAMP}.sql.gz"
+     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz"
 
 # Upload checksum
 curl --max-time 60 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
      -H "Content-Type: text/plain" \
      --data-binary @"\$FILE.sha256" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\$${TIMESTAMP}.sql.gz.sha256"
+     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz.sha256"
 
 # Verify upload integrity — read back checksum from GCS and compare with local
 LOCAL_SUM=\$(cat "\$FILE.sha256" 2>/dev/null || true)
@@ -788,7 +786,7 @@ echo "BACKUP_OK \$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 EOF
 chmod +x /home/docker/backup.sh
 
-cat <<'SVCEOF' > /etc/systemd/system/n8n-backup.service
+cat <<'SVCEOF' > /etc/systemd/system/n8n-backup.service || true
 [Unit]
 Description=n8n Postgres Backup
 [Service]
@@ -796,7 +794,7 @@ Type=oneshot
 ExecStart=/home/docker/backup.sh
 SVCEOF
 
-cat <<'TMREOF' > /etc/systemd/system/n8n-backup.timer
+cat <<'TMREOF' > /etc/systemd/system/n8n-backup.timer || true
 [Unit]
 Description=Run n8n Backup every 10 min
 [Timer]
@@ -806,8 +804,8 @@ OnUnitActiveSec=10min
 WantedBy=timers.target
 TMREOF
 
-systemctl daemon-reload
-systemctl enable --now n8n-backup.timer
+systemctl daemon-reload || true
+systemctl enable --now n8n-backup.timer || echo "⚠️ systemd timer skipped"
 
 echo "=== ALL DONE ==="
 if [ "$HEALTHY" != "true" ]; then
