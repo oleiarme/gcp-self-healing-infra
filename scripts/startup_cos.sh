@@ -78,14 +78,23 @@ cat <<EOF > /etc/docker/daemon.json
 }
 EOF
 
-systemctl daemon-reexec
-systemctl restart docker
 
-# wait docker stable
-for i in {1..30}; do
-  docker info >/dev/null 2>&1 && break
-  sleep 2
-done
+DOCKER_READY_FILE="/var/run/docker-initialized"
+
+if [ ! -f "$DOCKER_READY_FILE" ]; then
+  echo "=== Initial Docker restart ==="
+  systemctl restart docker
+
+  for i in {1..30}; do
+    docker info >/dev/null 2>&1 && break
+    sleep 2
+  done
+
+  sleep 5
+  touch "$DOCKER_READY_FILE"
+else
+  echo "=== Docker already initialized, skipping restart ==="
+fi
 
 docker info | grep "Docker Root Dir"
 
