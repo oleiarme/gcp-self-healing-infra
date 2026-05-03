@@ -330,8 +330,9 @@ if ! swapon --show | grep -q "$SWAP_FILE"; then
   swapon "$SWAP_FILE"
 fi
 sysctl -w vm.swappiness=10
-mkdir -p /home/docker/n8n
-chown -R 1000:1000 /mnt/disks/data/n8n 
+mkdir -p /mnt/disks/data/n8n
+chown -R 1000:1000 /mnt/disks/data/n8n
+mkdir -p /home/docker/n8n 
 
 # ==========================================
 # 7. Docker Network + Image Pull
@@ -456,6 +457,8 @@ umask 022
 chmod 644 /dev/shm/n8n-secrets/db_password
 chmod 644 /dev/shm/n8n-secrets/n8n_key
 chmod 644 /dev/shm/n8n-secrets/cf_token
+
+chmod 755 /dev/shm/n8n-secrets  
 
 echo "=== Verify Secrets Before Start ==="
 for f in db_password n8n_key cf_token; do
@@ -725,7 +728,7 @@ docker run -d \
   -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
   -e EXECUTIONS_DATA_PRUNE=true \
   -e EXECUTIONS_DATA_MAX_AGE_HISTORY=24 \
-  -e N8N_RUNNERS_ENABLED=true \
+  #-e N8N_RUNNERS_ENABLED=true \
   -e N8N_RUNNERS_MODE=internal \
   -e N8N_HOST="${n8n_public_host}" \
   -e N8N_PROTOCOL=https \
