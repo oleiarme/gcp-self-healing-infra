@@ -713,7 +713,7 @@ docker run -d \
   --memory-swap 600m \
   -p 127.0.0.1:5678:5678 \
   -v /dev/shm/n8n-secrets:/run/secrets:ro \
-  -v /mnt/disks/data/n8n:/home/node/.n8n \ 
+  -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
   -e DB_POSTGRESDB_PORT="${db_port}" \
