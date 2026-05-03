@@ -510,7 +510,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 1200
+    initial_delay_sec = 2700
   }
 
   update_policy {
