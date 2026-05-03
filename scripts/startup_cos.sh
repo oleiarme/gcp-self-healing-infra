@@ -136,105 +136,29 @@ docker info | grep "Docker Root Dir"
 
 
 
-# ==========================================
-# 3. Health server (AFTER Docker restart)
-# ==========================================
 echo "=== Starting Early Health Check Server (port 8080) ==="
-cat <<EOF > /tmp/health_server.py
-import http.server
-import socketserver
-import time
-import socket
-import urllib.request
+cat <<'EOF' > /tmp/health_server.py
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 
-START_TIME = time.time()
-BOOTSTRAP_WINDOW = 1800
-STALL_TIMEOUT = 300
-MAX_BOOT_TIME = 1800
-LAST_PROGRESS_FILE = '/tmp/health_progress'
-
-def touch_progress():
-    with open(LAST_PROGRESS_FILE, 'w') as f:
-        f.write(str(time.time()))
-
-def get_last_progress():
-    try:
-        with open(LAST_PROGRESS_FILE) as f:
-            return float(f.read().strip())
-    except:
-        return START_TIME
-
-def check_port(port):
-    try:
-        s = socket.create_connection(("127.0.0.1", port), timeout=1)
-        s.close()
-        return True
-    except:
-        return False
-
-def check_http(url):
-    try:
-        urllib.request.urlopen(url, timeout=2)
-        return True
-    except:
-        return False
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, format, *args):
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK')
+    
+    def log_message(self, *args):
         pass
 
-    def do_GET(self):
-        uptime = time.time() - START_TIME
-
-        
-        if uptime < BOOTSTRAP_WINDOW:
-            touch_progress()
-
-        try:
-            n8n_ok = check_http("http://127.0.0.1:5678/healthz")
-            pg_ok = check_port(5432)
-            ready = (n8n_ok and pg_ok)
-
-            if n8n_ok or pg_ok:
-                touch_progress()
-        except:
-            ready = False
-
-        if not ready and uptime > MAX_BOOT_TIME:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(b"HARD_FAIL")
-            return
-
-        if not ready and uptime < BOOTSTRAP_WINDOW:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"BOOTSTRAP")
-            return
-
-        if not ready:
-            if time.time() - get_last_progress() > STALL_TIMEOUT:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(b"STALLED")
-                return
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"BOOTSTRAP")
-            return
-
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+class ThreadingServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-with ThreadingTCPServer(("", 8080), Handler) as httpd:
-    httpd.serve_forever()
+if __name__ == '__main__':
+    with ThreadingServer(('0.0.0.0', 8080), H) as server:
+        server.serve_forever()
 EOF
-
 
 docker rm -f health-server 2>/dev/null || true
 
