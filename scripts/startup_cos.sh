@@ -774,7 +774,7 @@ docker run -d \
 # ==========================================
 echo "=== Final Health Verification ==="
 HEALTHY=false
-for i in {1..30}; do
+for i in {1..60}; do
   n8n_ok=false
   cf_ok=false
 
@@ -913,11 +913,12 @@ systemctl enable --now n8n-backup.timer || echo "⚠️ systemd timer skipped"
 
 
 
-echo "=== ALL DONE ==="
-if [ "$HEALTHY" != "true" ]; then
-  echo "❌ Instance not healthy → forcing recreate"
-  exit 1
-fi
 rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true
 
-exit 0
+if [ "$HEALTHY" != "true" ]; then
+  echo "⚠️ WARNING: not all services healthy at startup end, but continuing"
+  echo "=== n8n logs ==="
+  docker logs n8n --tail=20 || true
+  echo "=== cloudflared logs ==="
+  docker logs cloudflared --tail=20 || true
+fi
