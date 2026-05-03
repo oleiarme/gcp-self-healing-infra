@@ -471,7 +471,7 @@ done
 docker rm -f postgres 2>/dev/null || true 
 echo "=== Ensure Docker network ==="
 docker network inspect n8n-net >/dev/null 2>&1 || \
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
 echo "=== Starting Postgres ==="
 docker run -d \
@@ -700,7 +700,9 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 fi
 
 docker rm -f n8n 2>/dev/null || true
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
+docker network inspect n8n-net >/dev/null 2>&1 || \
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
+
 # ==========================================
 # 10. Start n8n
 # ==========================================
@@ -762,7 +764,8 @@ fi
 
 
 docker rm -f cloudflared 2>/dev/null || true
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
+docker network inspect n8n-net >/dev/null 2>&1 || \
+docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
 echo "=== Starting cloudflared ==="
 docker run -d \
