@@ -442,7 +442,7 @@ DB_USER=${db_user}
 DB_PORT=${db_port}
 N8N_PUBLIC_HOST=${n8n_public_host}
 EOF
-chmod 600 /home/docker/runtime.env
+chmod 644  /home/docker/runtime.env
 
 # ==========================================
 # 8. Start Postgres
