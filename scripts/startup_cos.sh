@@ -331,6 +331,7 @@ if ! swapon --show | grep -q "$SWAP_FILE"; then
 fi
 sysctl -w vm.swappiness=10
 mkdir -p /home/docker/n8n
+chown -R 1000:1000 /mnt/disks/data/n8n 
 
 # ==========================================
 # 7. Docker Network + Image Pull
@@ -709,6 +710,7 @@ docker run -d \
   --memory-swap 600m \
   -p 127.0.0.1:5678:5678 \
   -v /dev/shm/n8n-secrets:/run/secrets:ro \
+  -v /mnt/disks/data/n8n:/home/node/.n8n \ 
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
   -e DB_POSTGRESDB_PORT="${db_port}" \
@@ -913,7 +915,7 @@ systemctl enable --now n8n-backup.timer || echo "⚠️ systemd timer skipped"
 
 
 
-rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true
+#rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true
 
 if [ "$HEALTHY" != "true" ]; then
   echo "⚠️ WARNING: not all services healthy at startup end, but continuing"
