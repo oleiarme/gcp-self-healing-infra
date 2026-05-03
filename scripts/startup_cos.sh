@@ -728,7 +728,6 @@ docker run -d \
   -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
   -e EXECUTIONS_DATA_PRUNE=true \
   -e EXECUTIONS_DATA_MAX_AGE_HISTORY=24 \
-  #-e N8N_RUNNERS_ENABLED=true \
   -e N8N_RUNNERS_MODE=internal \
   -e N8N_HOST="${n8n_public_host}" \
   -e N8N_PROTOCOL=https \
