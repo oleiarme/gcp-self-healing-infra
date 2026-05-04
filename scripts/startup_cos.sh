@@ -661,9 +661,7 @@ docker run -d \
   -e EXECUTIONS_MODE=queue \
   -e QUEUE_BULL_REDIS_HOST=redis \
   -e QUEUE_BULL_REDIS_PORT=6379 \
-  "$N8N_TARGET"
-
-
+  n8nio/n8n:2.17.7
 
 echo "=== Waiting for n8n (API ready) ==="
 READY=false
@@ -700,7 +698,7 @@ docker run -d \
   -e EXECUTIONS_MODE=queue \
   -e QUEUE_BULL_REDIS_HOST=redis \
   -e QUEUE_BULL_REDIS_PORT=6379 \
-  "$N8N_TARGET" \
+  n8nio/n8n:2.17.7 \
   worker
 
 
