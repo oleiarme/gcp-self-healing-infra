@@ -160,6 +160,12 @@ EOF
 
 docker rm -f health-server 2>/dev/null || true
 
+echo "=== Waiting for network ==="
+until curl -s https://registry-1.docker.io/v2/ > /dev/null; do
+  echo "Waiting for Docker Hub..."
+  sleep 2
+done
+
 docker run -d --name health-server --restart always --network host \
   -v /tmp/health_server.py:/health_server.py:ro \
   docker.io/library/python:3-alpine python3 /health_server.py
