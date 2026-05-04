@@ -690,7 +690,7 @@ docker run -d \
   worker
 
 
-echo "=== n8n stack started successfully ===
+echo "=== n8n stack started successfully ==="
 
 # ==========================================
 # 11. Wait for n8n, then start cloudflared
