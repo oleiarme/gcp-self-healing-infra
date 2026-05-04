@@ -132,38 +132,12 @@ fi
 
 docker info | grep "Docker Root Dir"
 
-
-
-echo "=== Starting Early Health Check Server (port 8080) ==="
-cat <<'EOF' > /tmp/health_server.py
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
-
-class H(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b'OK')
-    
-    def log_message(self, *args):
-        pass
-
-class ThreadingServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-
-if __name__ == '__main__':
-    with ThreadingServer(('0.0.0.0', 8080), H) as server:
-        server.serve_forever()
-EOF
-
 docker rm -f health-server 2>/dev/null || true
 
 echo "=== Waiting for network ==="
 echo "=== Ensuring network OR cached images ==="
 
-if ! docker image inspect python:3-alpine >/dev/null 2>&1; then
+if ! docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1; then
   echo "No cached image → waiting for network"
   until curl -s https://registry-1.docker.io/v2/ > /dev/null; do
     sleep 2
@@ -177,8 +151,7 @@ docker pull mirror.gcr.io/library/busybox
 
 docker run -d --name health-server --restart always --network host \
   mirror.gcr.io/library/busybox \
-  sh -c "mkdir -p /www && echo 'OK' > /www/index.html && exec httpd -f -p 8080 -h /www" docker.io/library/python:3-alpine python3 /health_server.py
-
+  sh -c "mkdir -p /www && echo 'OK' > /www/index.html && exec httpd -f -p 8080 -h /www"
 sleep 2
 docker ps | grep health-server || {
   echo "❌ health-server failed to start"
@@ -334,16 +307,17 @@ fi
 
 echo "=== Pull Docker images ==="
 pull_with_fallback() {
+  local name="$1"
+  local primary="$2"
+  local fallback="$3"
+  local selected="$primary"
+
   # Use cached image first
   if docker image inspect "$primary" >/dev/null 2>&1; then
     echo "✅ Using cached $name image: $primary" >&2
     printf "%s" "$primary"
     return 0
   fi
-  local name="$1"
-  local primary="$2"
-  local fallback="$3"
-  local selected="$primary"
 
   echo "→ Pulling $name from Artifact Registry: $primary" >&2
   
