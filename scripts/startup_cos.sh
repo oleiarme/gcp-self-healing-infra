@@ -632,10 +632,15 @@ docker run -d \
 
 
 echo "=== Waiting for Redis ==="
+
 for i in {1..30}; do
   docker exec redis redis-cli ping >/dev/null 2>&1 && break
   sleep 2
 done
+
+echo "=== Reset Redis state (flush) ==="
+docker exec redis redis-cli FLUSHALL || true
+
 echo "=== Starting n8n (main) ==="
 
 docker rm -f n8n 2>/dev/null || true
@@ -660,10 +665,20 @@ docker run -d \
 
 
 echo "=== Waiting for n8n ==="
-for i in {1..30}; do
-  docker logs n8n 2>&1 | grep -q "Editor is now accessible" && break
+echo "=== Waiting for n8n (API ready) ==="
+READY=false
+for i in {1..60}; do
+  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+    ss -ltn | grep -q ":5679" && READY=true && break
+  fi
   sleep 2
 done
+
+if [ "$READY" != "true" ]; then
+  echo "❌ n8n not fully ready (broker not up)"
+  docker logs n8n --tail=50 || true
+  exit 1
+fi
 
 
 echo "=== Starting n8n worker ==="
