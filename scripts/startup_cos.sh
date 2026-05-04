@@ -172,9 +172,12 @@ else
   echo "Cached image exists → skip network wait"
 fi
 
+docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1 || \
+docker pull mirror.gcr.io/library/busybox
+
 docker run -d --name health-server --restart always --network host \
-  -v /tmp/health_server.py:/health_server.py:ro \
-  docker.io/library/python:3-alpine python3 /health_server.py
+  mirror.gcr.io/library/busybox \
+  sh -c "mkdir -p /www && echo 'OK' > /www/index.html && exec httpd -f -p 8080 -h /www" docker.io/library/python:3-alpine python3 /health_server.py
 
 sleep 2
 docker ps | grep health-server || {
@@ -701,7 +704,7 @@ docker run -d \
   -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT="${DB_PORT:-5432}" \
+  -e DB_POSTGRESDB_PORT="${db_port:-5432}" \
   -e DB_POSTGRESDB_DATABASE="${db_name}" \
   -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
