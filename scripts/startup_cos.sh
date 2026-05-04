@@ -161,10 +161,16 @@ EOF
 docker rm -f health-server 2>/dev/null || true
 
 echo "=== Waiting for network ==="
-until curl -s https://registry-1.docker.io/v2/ > /dev/null; do
-  echo "Waiting for Docker Hub..."
-  sleep 2
-done
+echo "=== Ensuring network OR cached images ==="
+
+if ! docker image inspect python:3-alpine >/dev/null 2>&1; then
+  echo "No cached image → waiting for network"
+  until curl -s https://registry-1.docker.io/v2/ > /dev/null; do
+    sleep 2
+  done
+else
+  echo "Cached image exists → skip network wait"
+fi
 
 docker run -d --name health-server --restart always --network host \
   -v /tmp/health_server.py:/health_server.py:ro \
@@ -325,6 +331,12 @@ fi
 
 echo "=== Pull Docker images ==="
 pull_with_fallback() {
+  # Use cached image first
+  if docker image inspect "$primary" >/dev/null 2>&1; then
+    echo "✅ Using cached $name image: $primary" >&2
+    printf "%s" "$primary"
+    return 0
+  fi
   local name="$1"
   local primary="$2"
   local fallback="$3"
@@ -359,7 +371,7 @@ pull_with_fallback() {
 N8N_TARGET=$(pull_with_fallback "n8n" "${n8n_ar_image}" "${n8n_image}")
 CF_TARGET=$(pull_with_fallback "cloudflared" "${cloudflared_ar_image}" "${cloudflared_image}")
 POSTGRES_IMAGE="postgres:15-alpine"
-docker pull "$POSTGRES_IMAGE"
+docker image inspect "$POSTGRES_IMAGE" >/dev/null 2>&1 || docker pull "$POSTGRES_IMAGE"
 
 cat <<EOF > /home/docker/runtime.env
 N8N_TARGET=$N8N_TARGET
@@ -634,6 +646,7 @@ docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 echo "=== Starting Redis ==="
 
 docker rm -f redis 2>/dev/null || true
+docker image inspect redis:7-alpine >/dev/null 2>&1 || docker pull redis:7-alpine
 docker run -d \
   --name redis \
   --network n8n-net \
@@ -667,7 +680,7 @@ docker run -d \
   -e QUEUE_BULL_REDIS_HOST=redis \
   -e QUEUE_BULL_REDIS_PORT=6379 \
   -e N8N_RUNNERS_ENABLED=false \
-  n8nio/n8n:2.17.7
+  "$N8N_TARGET"
 
 
 echo "=== Waiting for n8n ==="
@@ -688,7 +701,7 @@ docker run -d \
   -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT="${db_port}" \
+  -e DB_POSTGRESDB_PORT="${DB_PORT:-5432}" \
   -e DB_POSTGRESDB_DATABASE="${db_name}" \
   -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
@@ -696,7 +709,7 @@ docker run -d \
   -e N8N_EXECUTIONS_MODE=queue \
   -e QUEUE_BULL_REDIS_HOST=redis \
   -e QUEUE_BULL_REDIS_PORT=6379 \
-  n8nio/n8n:2.17.7 \
+  "$N8N_TARGET" \
   worker
 
 
