@@ -664,7 +664,7 @@ docker run -d \
   "$N8N_TARGET"
 
 
-echo "=== Waiting for n8n ==="
+
 echo "=== Waiting for n8n (API ready) ==="
 READY=false
 for i in {1..60}; do
