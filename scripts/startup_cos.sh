@@ -656,7 +656,6 @@ docker run -d \
   -e N8N_EXECUTIONS_MODE=queue \
   -e QUEUE_BULL_REDIS_HOST=redis \
   -e QUEUE_BULL_REDIS_PORT=6379 \
-  -e N8N_RUNNERS_ENABLED=false \
   "$N8N_TARGET"
 
 
