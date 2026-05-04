@@ -725,19 +725,35 @@ if [ "$N8N_READY" != "true" ]; then
 fi
 
 
+# ==========================================
+# Cloudflared (FIXED)
+# ==========================================
+
 docker rm -f cloudflared 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || \
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
+
+# ensure persistent secrets
+mkdir -p /mnt/disks/data/n8n-secrets
+
+# migrate token from shm → disk (one-time)
+if [ -f /dev/shm/n8n-secrets/cf_token ] && [ ! -f /mnt/disks/data/n8n-secrets/cf_token ]; then
+  cp /dev/shm/n8n-secrets/cf_token /mnt/disks/data/n8n-secrets/
+fi
+
+# validate token
+if [ ! -s /mnt/disks/data/n8n-secrets/cf_token ]; then
+  echo "❌ CF token missing"
+  exit 1
+fi
 
 echo "=== Starting cloudflared ==="
+
 docker run -d \
   --name cloudflared \
   --network n8n-net \
   --restart unless-stopped \
-  -p 127.0.0.1:2000:2000 \
-  -e TUNNEL_TOKEN="$(cat /dev/shm/n8n-secrets/cf_token)" \
-  "$CF_TARGET" \
-  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run
+  -e TUNNEL_TOKEN="$(cat /mnt/disks/data/n8n-secrets/cf_token)" \
+  cloudflare/cloudflared:latest \
+  tunnel --no-autoupdate run
 # ==========================================
 # 12. Final health verification
 # ==========================================
@@ -750,7 +766,7 @@ for i in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     n8n_ok=true
   fi
-  if curl -fsS http://127.0.0.1:2000/ready >/dev/null 2>&1; then
+  if docker logs cloudflared 2>&1 | grep -q "Connected to Cloudflare"; then
     cf_ok=true
   fi
 
