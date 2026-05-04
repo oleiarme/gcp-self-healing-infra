@@ -52,9 +52,7 @@ echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
 # 0. Utility functions
 # ==========================================
 
-touch_progress_safe() {
-  echo "$(date +%s)" > /tmp/health_progress 2>/dev/null || true
-}
+
 retry() {
   for i in {1..5}; do
     "$@" && return 0
@@ -440,7 +438,7 @@ fi
 SKIP_RESTORE=false
 
 echo "→ Checking DB state..."
-touch_progress_safe
+
 
 # --- 1. Check DB exists ---
 DB_EXISTS=$(timeout 5s docker exec postgres psql \
@@ -519,7 +517,7 @@ else
   echo "⚠️ DB does not exist → restore required"
 fi
 
-touch_progress_safe
+
 
 # ==========================================
 # RESTORE ENTRY POINT (single gate)
@@ -528,7 +526,7 @@ touch_progress_safe
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "→ DB not healthy or missing → restore required"
   echo "=== ENTER RESTORE BLOCK ==="
-  touch_progress_safe
+  
 
   echo "→ Requesting backup list from GCS..."
   TOKEN=$(get_token)
@@ -539,11 +537,11 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 
   if [ -z "$BACKUP_INFO" ]; then
     echo "⚠️ EMPTY BACKUP RESPONSE — skipping restore"
-    touch_progress_safe
+    
   else
     echo "DEBUG: BACKUP_INFO length=${#BACKUP_INFO}"
     echo "$BACKUP_INFO" | head -c 300 || true
-    touch_progress_safe
+    
 
     LATEST_OBJ=$(echo "$BACKUP_INFO" \
       | grep -o '"name": "[^"]*' \
@@ -618,7 +616,7 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 
       rm -f "$RESTORE_FILE"
       echo "✅ Restore completed"
-      touch_progress_safe
+      
     fi
   fi
 fi
@@ -654,7 +652,7 @@ docker run -d \
   -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
   -e EXECUTIONS_DATA_PRUNE=true \
   -e EXECUTIONS_DATA_MAX_AGE_HISTORY=24 \
-  -e N8N_RUNNERS_MODE=internal \
+  -e N8N_RUNNERS_ENABLED=false \
   -e N8N_HOST="${n8n_public_host}" \
   -e N8N_PROTOCOL=https \
   -e WEBHOOK_URL="https://${n8n_public_host}/" \
