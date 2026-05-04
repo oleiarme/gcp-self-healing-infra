@@ -625,44 +625,76 @@ docker rm -f n8n 2>/dev/null || true
 docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
-# ==========================================
-# 10. Start n8n
-# ==========================================
-echo "=== Starting n8n ==="
+echo "=== Starting Redis ==="
+
+docker rm -f redis 2>/dev/null || true
+docker run -d \
+  --name redis \
+  --network n8n-net \
+  --restart unless-stopped \
+  redis:7-alpine
+
+
+echo "=== Waiting for Redis ==="
+for i in {1..30}; do
+  docker exec redis redis-cli ping >/dev/null 2>&1 && break
+  sleep 2
+done
+echo "=== Starting n8n (main) ==="
+
+docker rm -f n8n 2>/dev/null || true
 docker run -d \
   --name n8n \
   --network n8n-net \
   --restart unless-stopped \
-  --memory 400m \
-  --memory-swap 600m \
   -p 127.0.0.1:5678:5678 \
   -v /dev/shm/n8n-secrets:/run/secrets:ro \
   -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT="${db_port}" \
-  -e DB_POSTGRESDB_DATABASE="${db_name}" \
-  -e DB_POSTGRESDB_USER="${db_user}" \
-  -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
-  -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-  -e N8N_EXECUTIONS_MODE=regular \
-  -e N8N_CONCURRENCY_PRODUCTION_LIMIT=1 \
-  -e N8N_LOG_LEVEL=warn \
-  -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
-  -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
-  -e EXECUTIONS_DATA_PRUNE=true \
-  -e EXECUTIONS_DATA_MAX_AGE_HISTORY=24 \
+  -e DB_POSTGRESDB_PORT="${DB_PORT}" \
+  -e DB_POSTGRESDB_DATABASE="${DB_NAME}" \
+  -e DB_POSTGRESDB_USER="${DB_USER}" \
+  -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
+  -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
+  -e N8N_EXECUTIONS_MODE=queue \
+  -e QUEUE_BULL_REDIS_HOST=redis \
+  -e QUEUE_BULL_REDIS_PORT=6379 \
   -e N8N_RUNNERS_ENABLED=false \
-  -e N8N_HOST="${n8n_public_host}" \
-  -e N8N_PROTOCOL=https \
-  -e WEBHOOK_URL="https://${n8n_public_host}/" \
-  -e N8N_DIAGNOSTICS_ENABLED=false \
-  -e N8N_METRICS_ENABLED=false \
-  -e N8N_PORT=5678 \
-  -e NODE_OPTIONS="--max-old-space-size=256" \
-  -e N8N_LISTEN_ADDRESS=0.0.0.0 \
-  -e DB_POSTGRESDB_CONNECTION_TIMEOUT=60000 \
-  "$N8N_TARGET"
+  n8nio/n8n:2.17.7
+
+
+echo "=== Waiting for n8n ==="
+for i in {1..30}; do
+  docker logs n8n 2>&1 | grep -q "Editor is now accessible" && break
+  sleep 2
+done
+
+
+echo "=== Starting n8n worker ==="
+
+docker rm -f n8n-worker 2>/dev/null || true
+docker run -d \
+  --name n8n-worker \
+  --network n8n-net \
+  --restart unless-stopped \
+  -v /dev/shm/n8n-secrets:/run/secrets:ro \
+  -v /mnt/disks/data/n8n:/home/node/.n8n \
+  -e DB_TYPE=postgresdb \
+  -e DB_POSTGRESDB_HOST=postgres \
+  -e DB_POSTGRESDB_PORT="${DB_PORT}" \
+  -e DB_POSTGRESDB_DATABASE="${DB_NAME}" \
+  -e DB_POSTGRESDB_USER="${DB_USER}" \
+  -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
+  -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
+  -e N8N_EXECUTIONS_MODE=queue \
+  -e QUEUE_BULL_REDIS_HOST=redis \
+  -e QUEUE_BULL_REDIS_PORT=6379 \
+  n8nio/n8n:2.17.7 \
+  worker
+
+
+echo "=== n8n stack started successfully ===
 
 # ==========================================
 # 11. Wait for n8n, then start cloudflared
