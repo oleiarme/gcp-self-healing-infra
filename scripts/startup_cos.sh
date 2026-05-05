@@ -52,7 +52,6 @@ echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
 # 0. Utility functions
 # ==========================================
 
-
 retry() {
   for i in {1..5}; do
     "$@" && return 0
@@ -91,10 +90,7 @@ get_secret() {
   fi
 
   echo "$DATA" | base64 -d
-} 
-
-
-
+}
 
 mkdir -p /mnt/stateful_partition/docker
 
@@ -110,7 +106,6 @@ cat <<EOF > /etc/docker/daemon.json
   }
 }
 EOF
-
 
 DOCKER_READY_FILE="/var/run/docker-initialized"
 
@@ -229,6 +224,7 @@ mount -o discard,defaults "$DATA_DISK" /mnt/disks/data
 
 mkdir -p /mnt/disks/data/postgres
 chown -R 70:70 /mnt/disks/data/postgres
+
 echo "=== Setup Swap on persistent disk ==="
 SWAP_FILE="/mnt/disks/data/swapfile"
 if [ ! -f "$SWAP_FILE" ]; then
@@ -240,21 +236,17 @@ if ! swapon --show | grep -q "$SWAP_FILE"; then
   swapon "$SWAP_FILE"
 fi
 sysctl -w vm.swappiness=10
+
 mkdir -p /mnt/disks/data/n8n
 chown -R 1000:1000 /mnt/disks/data/n8n
-mkdir -p /home/docker/n8n 
+mkdir -p /home/docker/n8n
 
 # ==========================================
 # 7. Docker Network + Image Pull
 # ==========================================
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
 
-# === Disk check (COS-aware) -- ===
-
-# Try to get Docker root
 DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
-
-# Fallback если docker ещё не стартовал
 if [ -z "$DOCKER_ROOT" ]; then
   DOCKER_ROOT="/mnt/stateful_partition"
   echo "⚠️ Docker not ready, fallback to $DOCKER_ROOT"
@@ -268,7 +260,6 @@ AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
 if [ "$AVAIL_KB" -lt 2097152 ]; then
   echo "⚠️ Low disk space on $DOCKER_ROOT ($((AVAIL_KB/1024))MB free). Cleaning..."
   docker system prune -af --volumes || true
-
   AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
 fi
 
@@ -276,7 +267,6 @@ if [ "$AVAIL_KB" -lt 1048576 ]; then
   echo "❌ CRITICAL: Still low disk space ($((AVAIL_KB/1024))MB)"
   exit 1
 fi
-
 
 echo "=== Docker auth for Artifact Registry (COS-safe) ==="
 TOKEN=$(get_token)
@@ -304,7 +294,6 @@ else
   echo "⚠️ n8n_ar_image not set → skipping AR auth"
 fi
 
-
 echo "=== Pull Docker images ==="
 pull_with_fallback() {
   local name="$1"
@@ -312,7 +301,6 @@ pull_with_fallback() {
   local fallback="$3"
   local selected="$primary"
 
-  # Use cached image first
   if docker image inspect "$primary" >/dev/null 2>&1; then
     echo "✅ Using cached $name image: $primary" >&2
     printf "%s" "$primary"
@@ -320,7 +308,7 @@ pull_with_fallback() {
   fi
 
   echo "→ Pulling $name from Artifact Registry: $primary" >&2
-  
+
   for i in 1 2 3; do
     if timeout 1800 docker pull "$primary" >&2; then
       echo "✅ Pulled $name from AR (attempt $i)" >&2
@@ -359,33 +347,32 @@ DB_USER=${db_user}
 DB_PORT=${db_port}
 N8N_PUBLIC_HOST=${n8n_public_host}
 EOF
-chmod 644  /home/docker/runtime.env
+chmod 644 /home/docker/runtime.env
 
 # ==========================================
 # 8. Start Postgres
 # ==========================================
-# Write secrets to tmpfs (not written to disk) for Docker _FILE support
 umask 077
 mkdir -p /dev/shm/n8n-secrets
 printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
-printf "%s" "$N8N_KEY" > /dev/shm/n8n-secrets/n8n_key
-printf "%s" "$CF_TOKEN" > /dev/shm/n8n-secrets/cf_token
+printf "%s" "$N8N_KEY"     > /dev/shm/n8n-secrets/n8n_key
+printf "%s" "$CF_TOKEN"    > /dev/shm/n8n-secrets/cf_token
 umask 022
 chmod 644 /dev/shm/n8n-secrets/db_password
 chmod 644 /dev/shm/n8n-secrets/n8n_key
 chmod 644 /dev/shm/n8n-secrets/cf_token
-
-chmod 755 /dev/shm/n8n-secrets  
+chmod 755 /dev/shm/n8n-secrets
 
 echo "=== Verify Secrets Before Start ==="
 for f in db_password n8n_key cf_token; do
   if [ ! -s "/dev/shm/n8n-secrets/$f" ]; then
-    echo "❌ Missing secret: $f (secret fetch may have partially failed)"
+    echo "❌ Missing secret: $f"
     exit 1
   fi
 done
 
-docker rm -f postgres 2>/dev/null || true 
+docker rm -f postgres 2>/dev/null || true
+
 echo "=== Ensure Docker network ==="
 docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
@@ -434,11 +421,8 @@ SKIP_RESTORE=false
 
 echo "→ Checking DB state..."
 
-
-# --- 1. Check DB exists ---
 DB_EXISTS=$(timeout 5s docker exec postgres psql \
-  -U "${db_user}" \
-  -d postgres \
+  -U "${db_user}" -d postgres \
   -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
   2>/dev/null | xargs || echo "")
 
@@ -447,10 +431,8 @@ echo "DEBUG: DB_EXISTS=$DB_EXISTS"
 if [ "$DB_EXISTS" = "1" ]; then
   echo "→ DB exists. Checking schema integrity..."
 
-  # --- 2. Check migrations table exists (SAFE) ---
   MIGRATIONS_TABLE_EXISTS=$(timeout 5s docker exec postgres psql \
-    -U "${db_user}" \
-    -d "${db_name}" \
+    -U "${db_user}" -d "${db_name}" \
     -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='migrations';" \
     2>/dev/null | xargs || echo "")
 
@@ -458,10 +440,8 @@ if [ "$DB_EXISTS" = "1" ]; then
 
   if [ "$MIGRATIONS_TABLE_EXISTS" = "1" ]; then
 
-    # --- 3. Count migrations ---
     MIGRATION_COUNT=$(timeout 5s docker exec postgres psql \
-      -U "${db_user}" \
-      -d "${db_name}" \
+      -U "${db_user}" -d "${db_name}" \
       -tAc "SELECT COUNT(*) FROM migrations;" \
       2>/dev/null | xargs || echo "0")
 
@@ -469,10 +449,8 @@ if [ "$DB_EXISTS" = "1" ]; then
 
     if [ "$MIGRATION_COUNT" -gt 0 ] 2>/dev/null; then
 
-      # --- 4. Check workflow_entity table exists ---
       WORKFLOW_TABLE_EXISTS=$(timeout 15s docker exec postgres psql \
-        -U "${db_user}" \
-        -d "${db_name}" \
+        -U "${db_user}" -d "${db_name}" \
         -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='workflow_entity';" \
         2>/dev/null | xargs || echo "")
 
@@ -480,10 +458,8 @@ if [ "$DB_EXISTS" = "1" ]; then
 
       if [ "$WORKFLOW_TABLE_EXISTS" = "1" ]; then
 
-        # --- 5. Count workflows ---
         WORKFLOW_COUNT=$(timeout 5s docker exec postgres psql \
-          -U "${db_user}" \
-          -d "${db_name}" \
+          -U "${db_user}" -d "${db_name}" \
           -tAc "SELECT COUNT(*) FROM workflow_entity;" \
           2>/dev/null | xargs || echo "0")
 
@@ -512,16 +488,12 @@ else
   echo "⚠️ DB does not exist → restore required"
 fi
 
-
-
 # ==========================================
-# RESTORE ENTRY POINT (single gate)
+# RESTORE ENTRY POINT
 # ==========================================
-
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "→ DB not healthy or missing → restore required"
   echo "=== ENTER RESTORE BLOCK ==="
-  
 
   echo "→ Requesting backup list from GCS..."
   TOKEN=$(get_token)
@@ -532,11 +504,9 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 
   if [ -z "$BACKUP_INFO" ]; then
     echo "⚠️ EMPTY BACKUP RESPONSE — skipping restore"
-    
   else
     echo "DEBUG: BACKUP_INFO length=${#BACKUP_INFO}"
     echo "$BACKUP_INFO" | head -c 300 || true
-    
 
     LATEST_OBJ=$(echo "$BACKUP_INFO" \
       | grep -o '"name": "[^"]*' \
@@ -553,7 +523,6 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
       mkdir -p /mnt/disks/data/tmp
 
-      # --- 1. Скачиваем файл ---
       echo "→ Downloading backup: $LATEST_OBJ"
       ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
       TOKEN=$(get_token)
@@ -568,7 +537,6 @@ if [ "$SKIP_RESTORE" != "true" ]; then
       fi
       echo "✅ Backup downloaded ($(du -sh "$RESTORE_FILE" | cut -f1))"
 
-      # --- 2. Проверяем checksum (после скачивания) ---
       CHECKSUM_OBJ="${LATEST_OBJ}.sha256"
       ENCODED_CS=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${CHECKSUM_OBJ}', safe=''))")
       TOKEN=$(get_token)
@@ -589,7 +557,6 @@ if [ "$SKIP_RESTORE" != "true" ]; then
         echo "⚠️ No checksum file found — skipping verification"
       fi
 
-      # --- 3. Определяем формат и восстанавливаем ---
       echo "→ Detecting backup format..."
       if file "$RESTORE_FILE" | grep -q 'gzip'; then
         echo "→ Format: gzip compressed SQL"
@@ -611,7 +578,6 @@ if [ "$SKIP_RESTORE" != "true" ]; then
 
       rm -f "$RESTORE_FILE"
       echo "✅ Restore completed"
-      
     fi
   fi
 fi
@@ -620,30 +586,11 @@ docker rm -f n8n 2>/dev/null || true
 docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
-echo "=== Starting Redis ==="
+# ==========================================
+# 10. Start n8n (no queue mode, no Redis, no worker)
+# ==========================================
+echo "=== Starting n8n ==="
 
-docker rm -f redis 2>/dev/null || true
-docker image inspect redis:7-alpine >/dev/null 2>&1 || docker pull redis:7-alpine
-docker run -d \
-  --name redis \
-  --network n8n-net \
-  --restart unless-stopped \
-  redis:7-alpine
-
-
-echo "=== Waiting for Redis ==="
-
-for i in {1..30}; do
-  docker exec redis redis-cli ping >/dev/null 2>&1 && break
-  sleep 2
-done
-
-echo "=== Reset Redis state (flush) ==="
-docker exec redis redis-cli FLUSHALL || true
-
-echo "=== Starting n8n (main) ==="
-
-docker rm -f n8n 2>/dev/null || true
 docker run -d \
   --name n8n \
   --network n8n-net \
@@ -658,55 +605,8 @@ docker run -d \
   -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
   -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
-  -e EXECUTIONS_MODE=queue \
-  -e QUEUE_BULL_REDIS_HOST=redis \
-  -e QUEUE_BULL_REDIS_PORT=6379 \
-  n8nio/n8n:2.17.7
+  "$N8N_TARGET"
 
-echo "=== Waiting for n8n (API ready) ==="
-READY=false
-for i in {1..60}; do
-  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
-    ss -ltn | grep -q ":5679" && READY=true && break
-  fi
-  sleep 2
-done
-
-if [ "$READY" != "true" ]; then
-  echo "❌ n8n not fully ready (broker not up)"
-  docker logs n8n --tail=50 || true
-  exit 1
-fi
-
-
-echo "=== Starting n8n worker ==="
-
-docker rm -f n8n-worker 2>/dev/null || true
-docker run -d \
-  --name n8n-worker \
-  --network n8n-net \
-  --restart unless-stopped \
-  -v /dev/shm/n8n-secrets:/run/secrets:ro \
-  -v /mnt/disks/data/n8n:/home/node/.n8n \
-  -e DB_TYPE=postgresdb \
-  -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT="${db_port:-5432}" \
-  -e DB_POSTGRESDB_DATABASE="${db_name}" \
-  -e DB_POSTGRESDB_USER="${db_user}" \
-  -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
-  -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
-  -e EXECUTIONS_MODE=queue \
-  -e QUEUE_BULL_REDIS_HOST=redis \
-  -e QUEUE_BULL_REDIS_PORT=6379 \
-  n8nio/n8n:2.17.7 \
-  worker
-
-
-echo "=== n8n stack started successfully ==="
-
-# ==========================================
-# 11. Wait for n8n, then start cloudflared
-# ==========================================
 echo "=== Waiting for n8n ==="
 N8N_READY=false
 for i in {1..180}; do
@@ -715,45 +615,41 @@ for i in {1..180}; do
     N8N_READY=true
     break
   fi
-  echo "⏳ Waiting for n8n ($i/60)..."
+  echo "⏳ Waiting for n8n ($i/180)..."
   sleep 5
 done
 
 if [ "$N8N_READY" != "true" ]; then
   echo "❌ n8n failed to become ready"
   docker logs n8n --tail=50 || true
+  exit 1
 fi
 
-
 # ==========================================
-# Cloudflared (FIXED)
+# 11. Start cloudflared
 # ==========================================
-
 docker rm -f cloudflared 2>/dev/null || true
 
-# ensure persistent secrets
 mkdir -p /mnt/disks/data/n8n-secrets
 
-# migrate token from shm → disk (one-time)
 if [ -f /dev/shm/n8n-secrets/cf_token ] && [ ! -f /mnt/disks/data/n8n-secrets/cf_token ]; then
   cp /dev/shm/n8n-secrets/cf_token /mnt/disks/data/n8n-secrets/
 fi
 
-# validate token
 if [ ! -s /mnt/disks/data/n8n-secrets/cf_token ]; then
   echo "❌ CF token missing"
   exit 1
 fi
 
 echo "=== Starting cloudflared ==="
-
 docker run -d \
   --name cloudflared \
   --network n8n-net \
   --restart unless-stopped \
   -e TUNNEL_TOKEN="$(cat /mnt/disks/data/n8n-secrets/cf_token)" \
-  cloudflare/cloudflared:latest \
+  "$CF_TARGET" \
   tunnel --no-autoupdate run
+
 # ==========================================
 # 12. Final health verification
 # ==========================================
@@ -775,7 +671,7 @@ for i in {1..60}; do
     HEALTHY=true
     break
   fi
-  echo "⏳ Verifying ($i/30)..."
+  echo "⏳ Verifying ($i/60)..."
   sleep 5
 done
 
@@ -791,88 +687,89 @@ fi
 # 13. Backup via systemd timer
 # ==========================================
 echo "=== Setup Backup Timer ==="
-cat <<EOF > /home/docker/backup.sh
+cat <<'BACKUPEOF' > /home/docker/backup.sh
 #!/bin/bash
 set -e
-TOKEN=\$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
-TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
+TOKEN=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p /mnt/disks/data/tmp
-FILE="/mnt/disks/data/tmp/n8n-\${TIMESTAMP}.sql.gz"
+FILE="/mnt/disks/data/tmp/n8n-${TIMESTAMP}.sql.gz"
 
-COUNT=\$(docker exec postgres psql -U ${db_user} -d ${db_name} -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
-if [ "\$COUNT" -lt 1 ]; then
+COUNT=$(docker exec postgres psql -U DB_USER_PLACEHOLDER -d DB_NAME_PLACEHOLDER -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
+if [ "$COUNT" -lt 1 ]; then
   echo "⚠️ SKIP backup: no workflows"
   exit 0
 fi
 
-SIZE=\$(docker exec postgres psql -U ${db_user} -d ${db_name} -t -c "SELECT pg_database_size('${db_name}');" | xargs)
-if [ "\$SIZE" -lt 1000000 ]; then
-  echo "⚠️ SKIP backup: DB too small (\$SIZE bytes)"
+SIZE=$(docker exec postgres psql -U DB_USER_PLACEHOLDER -d DB_NAME_PLACEHOLDER -t -c "SELECT pg_database_size('DB_NAME_PLACEHOLDER');" | xargs)
+if [ "$SIZE" -lt 1000000 ]; then
+  echo "⚠️ SKIP backup: DB too small ($SIZE bytes)"
   exit 0
 fi
 
-# Disk pressure check — abort if <500MB free in /tmp
-AVAIL_KB=\$(df --output=avail /tmp | tail -1 | xargs)
-if [ "\$AVAIL_KB" -lt 512000 ]; then
-  echo "❌ SKIP backup: insufficient disk space (\${AVAIL_KB}KB free in /tmp)"
+AVAIL_KB=$(df --output=avail /tmp | tail -1 | xargs)
+if [ "$AVAIL_KB" -lt 512000 ]; then
+  echo "❌ SKIP backup: insufficient disk space (${AVAIL_KB}KB free in /tmp)"
   exit 1
 fi
 
-BACKUP_START=\$(date +%s)
-# Force WAL flush to ensure backup contains latest committed data
-docker exec postgres psql -U ${db_user} -d ${db_name} -c "CHECKPOINT;" 2>/dev/null || true
-timeout 300 docker exec postgres pg_dump -U ${db_user} --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 ${db_name} | gzip > "\$FILE"
-BACKUP_DURATION=\$(( \$(date +%s) - BACKUP_START ))
-echo "Backup duration: \${BACKUP_DURATION}s"
-if [ ! -s "\$FILE" ]; then
+BACKUP_START=$(date +%s)
+docker exec postgres psql -U DB_USER_PLACEHOLDER -d DB_NAME_PLACEHOLDER -c "CHECKPOINT;" 2>/dev/null || true
+timeout 300 docker exec postgres pg_dump -U DB_USER_PLACEHOLDER --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 DB_NAME_PLACEHOLDER | gzip > "$FILE"
+BACKUP_DURATION=$(( $(date +%s) - BACKUP_START ))
+echo "Backup duration: ${BACKUP_DURATION}s"
+
+if [ ! -s "$FILE" ]; then
   echo "❌ EMPTY BACKUP"
   exit 1
 fi
 
 cd /mnt/disks/data/tmp
-sha256sum "\$(basename \"\$FILE\")" > "\$FILE.sha256"
+sha256sum "$(basename "$FILE")" > "$FILE.sha256"
 
-# Upload backup
-curl --max-time 300 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
+curl --max-time 300 -sf -X POST -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/octet-stream" \
-     --data-binary @"\$FILE" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\${TIMESTAMP}.sql.gz"
+     --data-binary @"$FILE" \
+     "https://storage.googleapis.com/upload/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz"
 
-# Upload checksum
-curl --max-time 60 -sf -X POST -H "Authorization: Bearer \$TOKEN" \
+curl --max-time 60 -sf -X POST -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: text/plain" \
-     --data-binary @"\$FILE.sha256" \
-     "https://storage.googleapis.com/upload/storage/v1/b/${BACKUP_BUCKET_NAME}/o?uploadType=media&name=n8n/n8n-\${TIMESTAMP}.sql.gz.sha256"
+     --data-binary @"$FILE.sha256" \
+     "https://storage.googleapis.com/upload/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz.sha256"
 
-# Verify upload integrity — read back checksum from GCS and compare with local
-LOCAL_SUM=\$(cat "\$FILE.sha256" 2>/dev/null || true)
-REMOTE_SUM=\$(curl --max-time 60 -sf -H "Authorization: Bearer \$TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/n8n%2Fn8n-\${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
-if [ -n "\$REMOTE_SUM" ] && [ -n "\$LOCAL_SUM" ] && [ "\$REMOTE_SUM" != "\$LOCAL_SUM" ]; then
-  echo "❌ Checksum mismatch after upload — backup may be corrupt"
+LOCAL_SUM=$(cat "$FILE.sha256" 2>/dev/null || true)
+REMOTE_SUM=$(curl --max-time 60 -sf -H "Authorization: Bearer $TOKEN" \
+  "https://storage.googleapis.com/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o/n8n%2Fn8n-${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
+if [ -n "$REMOTE_SUM" ] && [ -n "$LOCAL_SUM" ] && [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
+  echo "❌ Checksum mismatch after upload"
   exit 1
 fi
 
-rm -f "\$FILE" "\$FILE.sha256"
-CUTOFF_DATE=\$(date -d '7 days ago' +%Y%m%d)
-OLD_BACKUPS=\$(curl -sf -H "Authorization: Bearer \$TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-" \
+rm -f "$FILE" "$FILE.sha256"
+
+CUTOFF_DATE=$(date -d '7 days ago' +%Y%m%d)
+OLD_BACKUPS=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+  "https://storage.googleapis.com/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o?prefix=n8n/n8n-" \
   | grep -o '"name": "[^"]*' | cut -d'"' -f4 \
   | grep -E '\.(sql\.gz|sha256)$' || true)
-  
 
-# Фильтруем по дате имени файла
 while IFS= read -r obj; do
-  FILE_DATE=\$(echo "\$obj" | grep -o '[0-9]\{8\}' | head -1)
-  if [ -n "\$FILE_DATE" ] && [ "\$FILE_DATE" -lt "\$CUTOFF_DATE" ]; then
-    ENCODED=\$(python3 -c "import urllib.parse; print(urllib.parse.quote('\$obj', safe=''))")
-    curl -sf -X DELETE -H "Authorization: Bearer \$TOKEN" \
-      "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o/\${ENCODED}" || true
-    echo "Deleted old backup: \$obj"
+  FILE_DATE=$(echo "$obj" | grep -o '[0-9]\{8\}' | head -1)
+  if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" -lt "$CUTOFF_DATE" ]; then
+    ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$obj', safe=''))")
+    curl -sf -X DELETE -H "Authorization: Bearer $TOKEN" \
+      "https://storage.googleapis.com/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o/${ENCODED}" || true
+    echo "Deleted old backup: $obj"
   fi
-done <<< "\$OLD_BACKUPS"
-echo "BACKUP_OK \$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-EOF
+done <<< "$OLD_BACKUPS"
+
+echo "BACKUP_OK $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+BACKUPEOF
+
+# Inject runtime values into backup.sh
+sed -i "s/DB_USER_PLACEHOLDER/${db_user}/g" /home/docker/backup.sh
+sed -i "s/DB_NAME_PLACEHOLDER/${db_name}/g" /home/docker/backup.sh
+sed -i "s/BACKUP_BUCKET_PLACEHOLDER/${BACKUP_BUCKET_NAME}/g" /home/docker/backup.sh
 chmod +x /home/docker/backup.sh
 
 cat <<'SVCEOF' > /etc/systemd/system/n8n-backup.service || true
@@ -896,10 +793,6 @@ TMREOF
 systemctl daemon-reload || true
 systemctl enable --now n8n-backup.timer || echo "⚠️ systemd timer skipped"
 
-
-
-#rm -rf /dev/shm/n8n-secrets/ 2>/dev/null || true
-
 if [ "$HEALTHY" != "true" ]; then
   echo "⚠️ WARNING: not all services healthy at startup end, but continuing"
   echo "=== n8n logs ==="
@@ -907,3 +800,5 @@ if [ "$HEALTHY" != "true" ]; then
   echo "=== cloudflared logs ==="
   docker logs cloudflared --tail=20 || true
 fi
+
+echo "✅ Startup complete"
