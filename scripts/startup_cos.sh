@@ -600,12 +600,20 @@ docker run -d \
   -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT="${db_port}" \
-  -e DB_POSTGRESDB_DATABASE="${db_name}" \
-  -e DB_POSTGRESDB_USER="${db_user}" \
+  -e DB_POSTGRESDB_PORT=5432 \
+  -e DB_POSTGRESDB_DATABASE=postgres \
+  -e DB_POSTGRESDB_USER=n8n \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
   -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
   -e N8N_RUNNERS_ENABLED=false \
+  -e N8N_RUNNERS_MODE=disabled \
+  -e N8N_RUNNERS_PYTHON_ENABLED=false \
+  -e DB_POSTGRESDB_CONNECTION_RETRY_ATTEMPTS=10 \
+  -e DB_POSTGRESDB_CONNECTION_RETRY_INTERVAL=2000 \
+  -e N8N_PROJECTS_ENABLED=true \
+  -e N8N_COLLABORATION_ENABLED=true \
+  -e N8N_TEMPLATES_ENABLED=true \
+  -e N8N_COMMUNITY_NODES_ENABLED=true \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
