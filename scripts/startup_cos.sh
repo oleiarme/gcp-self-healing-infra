@@ -402,17 +402,17 @@ docker run -d \
 
 echo "=== Waiting for Postgres ==="
 READY=false
-for i in {1..180}; do
-  if docker exec postgres pg_isready -U "${db_user}" >/dev/null 2>&1; then
-    if docker exec postgres psql -U "${db_user}" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
-      echo "✅ Postgres fully ready"
-      READY=true
-      break
-    fi
+for i in {1..30}; do
+  if docker exec postgres pg_isready -U "${db_user}" >/dev/null 2>&1 && \
+     docker exec postgres psql -U "${db_user}" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+    echo "✅ Postgres fully ready"
+    READY=true
+    break
   fi
-  echo "⏳ Waiting for Postgres ($i/180)..."
+  echo "⏳ waiting postgres ($i/30)..."
   sleep 2
 done
+
 
 if [ "$READY" != "true" ]; then
   echo "❌ Postgres failed to start"
@@ -644,8 +644,8 @@ docker run -d \
   -e DB_POSTGRESDB_CONNECTION_RETRY_INTERVAL=2000 \
   -e N8N_PROJECTS_ENABLED=true \
   -e N8N_COLLABORATION_ENABLED=true \
-  -e N8N_TEMPLATES_ENABLED=true \
-  -e N8N_COMMUNITY_NODES_ENABLED=true \
+  -e N8N_TEMPLATES_ENABLED=false \
+  -e N8N_COMMUNITY_NODES_ENABLED=false \
   -e N8N_RUNNERS_MODE=internal \
   -e N8N_RUNNERS_TASK_BROKER_DISABLED=true \
   "$N8N_TARGET"
