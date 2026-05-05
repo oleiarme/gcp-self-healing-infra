@@ -134,9 +134,15 @@ echo "=== Ensuring network OR cached images ==="
 
 if ! docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1; then
   echo "No cached image → waiting for network"
-  until curl -s https://registry-1.docker.io/v2/ > /dev/null; do
-    sleep 2
-  done
+  for i in {1..30}; do
+  if curl -sf https://registry.npmjs.org >/dev/null && \
+     curl -sf https://api.github.com >/dev/null; then
+    echo "✅ Network fully ready"
+    break
+  fi
+  echo "⏳ Waiting for full internet connectivity..."
+  sleep 2
+done
 else
   echo "Cached image exists → skip network wait"
 fi
@@ -488,11 +494,38 @@ else
   echo "⚠️ DB does not exist → restore required"
 fi
 
+
+echo "=== Smart DB Check ==="
+
+HAS_TABLE=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "
+SELECT EXISTS (
+  SELECT 1 FROM information_schema.tables
+  WHERE table_name='workflow_entity'
+);
+" | xargs)
+
+if [ "$HAS_TABLE" = "t" ]; then
+  COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "
+  SELECT COUNT(*) FROM workflow_entity;
+  " | xargs)
+
+  if [ "$COUNT" -gt 0 ]; then
+    echo "✅ DB already has data ($COUNT workflows) → SKIP restore"
+    SKIP_RESTORE=true
+  else
+    echo "⚠️ Table exists but empty → restore needed"
+  fi
+else
+  echo "⚠️ n8n tables missing → restore needed"
+fi
 # ==========================================
 # RESTORE ENTRY POINT
 # ==========================================
 if [ "$SKIP_RESTORE" != "true" ]; then
   echo "→ DB not healthy or missing → restore required"
+  echo "=== CLEAN DB BEFORE RESTORE ==="
+  docker exec postgres psql -U "${db_user}" -d "${db_name}" \
+    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
   echo "=== ENTER RESTORE BLOCK ==="
 
   echo "→ Requesting backup list from GCS..."
@@ -590,7 +623,7 @@ docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
 echo "=== Starting n8n ==="
-
+sleep 10
 docker run -d \
   --name n8n \
   --network n8n-net \
@@ -619,6 +652,7 @@ docker run -d \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
+sleep 10
 N8N_READY=false
 for i in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
