@@ -653,9 +653,9 @@ docker run -d \
   -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT="${db_port:-5432}" \
-  -e DB_POSTGRESDB_DATABASE="${db_name:-postgres}" \
-  -e DB_POSTGRESDB_USER="${db_user:-n8n}" \
+  -e DB_POSTGRESDB_PORT="${db_port}" \
+  -e DB_POSTGRESDB_DATABASE="${db_name}" \
+  -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
   -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
   -e EXECUTIONS_MODE=queue \
