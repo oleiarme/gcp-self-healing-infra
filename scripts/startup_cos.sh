@@ -706,7 +706,7 @@ for i in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     n8n_ok=true
   fi
-  if docker logs cloudflared 2>&1 | grep -q "Connected to Cloudflare"; then
+  if docker logs cloudflared 2>&1 | grep -q "Registered tunnel connection"; then
     cf_ok=true
   fi
 
