@@ -605,6 +605,7 @@ docker run -d \
   -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
   -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
+  -e N8N_RUNNERS_ENABLED=false \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
