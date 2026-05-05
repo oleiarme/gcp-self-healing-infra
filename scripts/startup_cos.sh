@@ -614,11 +614,13 @@ docker run -d \
   -e N8N_COLLABORATION_ENABLED=true \
   -e N8N_TEMPLATES_ENABLED=true \
   -e N8N_COMMUNITY_NODES_ENABLED=true \
+  -e N8N_RUNNERS_MODE=external \
+  -e N8N_RUNNERS_TASK_BROKER_DISABLED=true \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
 N8N_READY=false
-for i in {1..180}; do
+for i in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     echo "✅ n8n is ready"
     N8N_READY=true
