@@ -577,6 +577,17 @@ docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 echo "=== Cleaning n8n runtime state (one-time) ==="
 rm -rf /mnt/disks/data/n8n/*
 
+
+echo "→ Waiting for Postgres before starting n8n..."
+
+for i in {1..60}; do
+  if docker exec postgres pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+    echo "→ Postgres is ready"
+    break
+  fi
+  echo "→ waiting... ($i)"
+  sleep 2
+done
 # ==========================================
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
