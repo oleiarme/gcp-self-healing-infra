@@ -272,7 +272,7 @@ docker run -d \
 
         wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 && N8N_OK=true
         nc -z 127.0.0.1 5432 2>/dev/null && PG_OK=true
-        nc -z 127.0.0.1 2000 2>/dev/null && CF_OK=true
+        curl -sf http://127.0.0.1:2000/ready >/dev/null 2>&1 && CF_OK=true
 
         read -r _
 
@@ -633,7 +633,7 @@ for startup_retry in {1..60}; do
         break
       fi
 
-      echo "⏳ Waiting API warmup ($i/12)..."
+      echo "⏳ Waiting API warmup ($warmup_retry/12)..."
       sleep 5
     done
 
@@ -641,7 +641,7 @@ sleep 15
     N8N_READY=true
     break
   fi
-  echo "⏳ Waiting for n8n ($i/60)..."
+  echo "⏳ Waiting for n8n ($startup_retry/60)..."
   sleep 5
 done
 
@@ -693,7 +693,7 @@ for i in {1..60}; do
   n8n_ok=false
   cf_ok=false
 
-  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:5678/healthz | grep -q '"status":"ok"'; then
     n8n_ok=true
   fi
   if docker logs cloudflared 2>&1 | grep -q "Registered tunnel connection"; then
