@@ -591,8 +591,9 @@ done
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
 echo "=== Starting n8n ==="
-
+  
 docker run -d \
+  --name n8n \
   --stop-timeout 30 \
   --network n8n-net \
   --restart unless-stopped \
