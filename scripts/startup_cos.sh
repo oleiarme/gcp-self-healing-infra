@@ -375,7 +375,24 @@ fi
 sysctl -w vm.swappiness=10
 
 mkdir -p /mnt/disks/data/n8n
+
+# force correct ownership for n8n runtime
 chown -R 1000:1000 /mnt/disks/data/n8n
+
+# remove dangerous world-writable perms if they exist
+chmod 700 /mnt/disks/data/n8n || true
+
+# verify ownership
+N8N_UID=$(stat -c '%u' /mnt/disks/data/n8n)
+N8N_GID=$(stat -c '%g' /mnt/disks/data/n8n)
+
+if [ "$N8N_UID" != "1000" ] || [ "$N8N_GID" != "1000" ]; then
+  echo "❌ Invalid n8n directory ownership: ${N8N_UID}:${N8N_GID}"
+  exit 1
+fi
+
+echo "✅ n8n directory ownership verified"
+
 mkdir -p /home/docker/n8n
 
 # ==========================================
@@ -534,6 +551,8 @@ docker run -d \
   --health-retries=5 \
   "$POSTGRES_IMAGE"
 
+
+
 echo "=== Waiting for Postgres ==="
 READY=false
 for i in {1..30}; do
@@ -590,34 +609,51 @@ done
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
 echo "=== Starting n8n ==="
-
+N8N_RUNNER_TOKEN="my-secret-token-12345"
 docker run -d \
-      --name n8n \
-      --stop-timeout 30 \
-      --network n8n-net \
-      --restart unless-stopped \
-      -p 127.0.0.1:5678:5678 \
-      --memory="900m" \
-      --memory-swap="2g" \
-      -v /dev/shm/n8n-secrets:/run/secrets:ro \
-      -v /mnt/disks/data/n8n:/home/node/.n8n \
-      -e DB_TYPE=postgresdb \
-      -e DB_POSTGRESDB_HOST=postgres \
-      -e DB_POSTGRESDB_PORT=5432 \
-      -e DB_POSTGRESDB_DATABASE="${db_name}" \
-      -e DB_POSTGRESDB_USER="${db_user}" \
-      -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
-      -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-      -e N8N_RUNNERS_MODE=internal \
-      -e N8N_RUNNERS_JS_ENABLED=true \
-      -e N8N_RUNNERS_PYTHON_ENABLED=false \
-      -e N8N_RUNNERS_MAX_CONCURRENCY=1 \
-      -e N8N_RUNNERS_TASK_TIMEOUT=30 \
-      -e N8N_PROJECTS_ENABLED=false \
-      -e N8N_COLLABORATION_ENABLED=false \
-      -e N8N_TEMPLATES_ENABLED=false \
-      -e N8N_COMMUNITY_NODES_ENABLED=false \
-      "$N8N_TARGET"
+  --name n8n \
+  --stop-timeout 30 \
+  --network n8n-net \
+  --restart unless-stopped \
+  -p 127.0.0.1:5678:5678 \
+  --memory="900m" \
+  --memory-swap="1500m" \
+  -v /dev/shm/n8n-secrets:/run/secrets:ro \
+  -v /mnt/disks/data/n8n:/home/node/.n8n \
+  -e DB_TYPE=postgresdb \
+  -e DB_POSTGRESDB_HOST=postgres \
+  -e DB_POSTGRESDB_PORT=5432 \
+  -e DB_POSTGRESDB_DATABASE=postgres \
+  -e DB_POSTGRESDB_USER=n8n \
+  -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+  -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
+  -e N8N_RUNNERS_MODE=internal \
+  -e N8N_RUNNERS_JS_ENABLED=true \
+  -e N8N_RUNNERS_PYTHON_ENABLED=false \
+  -e N8N_RUNNERS_MAX_CONCURRENCY=1 \
+  -e N8N_RUNNERS_AUTH_ENABLED=true \
+  -e N8N_RUNNERS_AUTH_TOKEN="${N8N_RUNNER_TOKEN}" \
+  -e EXECUTIONS_PROCESS=main \
+  -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
+  -e N8N_PROJECTS_ENABLED=false \
+  -e N8N_COLLABORATION_ENABLED=false \
+  -e N8N_TEMPLATES_ENABLED=false \
+  -e N8N_COMMUNITY_NODES_ENABLED=false \
+  -e NODE_OPTIONS="--max-old-space-size=384" \
+  "$N8N_TARGET"
+
+
+echo "=== Verifying n8n runtime permissions ==="
+
+docker exec n8n sh -c '
+  touch /home/node/.n8n/.permission-test &&
+  rm -f /home/node/.n8n/.permission-test
+' || {
+  echo "❌ n8n cannot write to runtime directory"
+  exit 1
+}
+
+echo "✅ n8n runtime writable"
 
 echo "=== Waiting for n8n ==="
 
