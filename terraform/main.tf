@@ -441,7 +441,7 @@ resource "google_compute_instance_template" "tpl" {
     block-project-ssh-keys = "true"
     startup-script = file("${path.module}/../scripts/startup_cos.sh")
     config_db_user           = var.db_user
-config_db_name           = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
+config_db_name           = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : var.db_name
 config_db_secret         = google_secret_manager_secret.db_password.secret_id
 config_n8n_key_secret    = google_secret_manager_secret.n8n_key.secret_id
 config_cf_token_secret   = google_secret_manager_secret.cf_token.secret_id

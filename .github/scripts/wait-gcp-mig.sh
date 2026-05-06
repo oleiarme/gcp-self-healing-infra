@@ -78,7 +78,9 @@ while true; do
   # All instances must be RUNNING NONE
   CLEAN=$(echo "$STATUSES" | awk 'NF')
   #MATCH_COUNT=$(echo "$CLEAN" | grep -cE '^RUNNING[[:space:]]+NONE$' || true)
+  MATCH_COUNT=$(echo "$CLEAN" | awk '$1=="RUNNING" && $2=="NONE" {c++} END {print c+0}')
   TOTAL_COUNT=$(echo "$CLEAN" | wc -l | tr -d ' ')
+  
 
   if [ "$MATCH_COUNT" -gt 0 ] && [ "$MATCH_COUNT" -eq "$TOTAL_COUNT" ]; then
     echo "::notice::All MIG instances RUNNING, action NONE ($MATCH_COUNT/$TOTAL_COUNT) after ${ELAPSED}s"

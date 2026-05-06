@@ -61,6 +61,64 @@ echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
 # 0. Utility functions
 # ==========================================
 
+restore_db() {
+  echo "→ Fetching latest backup..."
+
+  TOKEN=$(get_token)
+
+  BACKUP_INFO=$(curl -fs \
+    -H "Authorization: Bearer $TOKEN" \
+    "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-" \
+    || true)
+
+  LATEST_OBJ=$(echo "$BACKUP_INFO" \
+    | grep -o '"name": "[^"]*' \
+    | cut -d'"' -f4 \
+    | grep -E '\.sql(\.gz)?$' \
+    | sort \
+    | tail -n 1)
+
+  if [ -z "$LATEST_OBJ" ]; then
+    echo "❌ No backup found → cannot restore"
+    exit 0
+  fi
+
+  echo "→ Latest backup: $LATEST_OBJ"
+
+  RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
+  mkdir -p /mnt/disks/data/tmp
+
+  ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
+  rm -f "$RESTORE_FILE"
+
+  curl -sf \
+    -H "Authorization: Bearer $TOKEN" \
+    "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_OBJ}?alt=media" \
+    -o "$RESTORE_FILE"
+
+  if [ ! -s "$RESTORE_FILE" ]; then
+    echo "❌ Backup empty"
+    exit 1
+  fi
+
+  echo "→ Resetting DB schema before restore"
+
+  docker exec postgres psql -U "${db_user}" -d "${db_name}" \
+    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+  echo "→ Restoring..."
+
+  if file "$RESTORE_FILE" | grep -q gzip; then
+    gunzip -c "$RESTORE_FILE" | timeout 600 docker exec -i postgres psql \
+      -U "${db_user}" -d "${db_name}"
+  else
+    timeout 600 docker exec -i postgres psql \
+      -U "${db_user}" -d "${db_name}" < "$RESTORE_FILE"
+  fi
+
+  echo "✅ Restore complete"
+}
+
 check_db_health() {
   echo "=== DB HEALTH CHECK (optimized) ==="
 
@@ -437,10 +495,10 @@ mkdir -p /dev/shm/n8n-secrets
 printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
 printf "%s" "$N8N_KEY"     > /dev/shm/n8n-secrets/n8n_key
 printf "%s" "$CF_TOKEN"    > /dev/shm/n8n-secrets/cf_token
-umask 022
 
-chmod 600 /dev/shm/n8n-secrets/*
-chmod 644 /dev/shm/n8n-secrets/db_password  
+
+chown -R 1000:1000 /dev/shm/n8n-secrets
+chmod 600 /dev/shm/n8n-secrets/*  
 
 
 echo "=== Verify Secrets Before Start ==="
@@ -509,63 +567,7 @@ fi
 # ==========================================
 # 9. Backup Restore (DR only)
 # ==========================================
-restore_db() {
-  echo "→ Fetching latest backup..."
 
-  TOKEN=$(get_token)
-
-  BACKUP_INFO=$(curl -fs \
-    -H "Authorization: Bearer $TOKEN" \
-    "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-" \
-    || true)
-
-  LATEST_OBJ=$(echo "$BACKUP_INFO" \
-    | grep -o '"name": "[^"]*' \
-    | cut -d'"' -f4 \
-    | grep -E '\.sql(\.gz)?$' \
-    | sort \
-    | tail -n 1)
-
-  if [ -z "$LATEST_OBJ" ]; then
-    echo "❌ No backup found → cannot restore"
-    exit 0
-  fi
-
-  echo "→ Latest backup: $LATEST_OBJ"
-
-  RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
-  mkdir -p /mnt/disks/data/tmp
-
-  ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
-  rm -f "$RESTORE_FILE"
-
-  curl -sf \
-    -H "Authorization: Bearer $TOKEN" \
-    "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_OBJ}?alt=media" \
-    -o "$RESTORE_FILE"
-
-  if [ ! -s "$RESTORE_FILE" ]; then
-    echo "❌ Backup empty"
-    exit 1
-  fi
-
-  echo "→ Resetting DB schema before restore"
-
-  docker exec postgres psql -U "${db_user}" -d "${db_name}" \
-    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-
-  echo "→ Restoring..."
-
-  if file "$RESTORE_FILE" | grep -q gzip; then
-    gunzip -c "$RESTORE_FILE" | timeout 600 docker exec -i postgres psql \
-      -U "${db_user}" -d "${db_name}"
-  else
-    timeout 600 docker exec -i postgres psql \
-      -U "${db_user}" -d "${db_name}" < "$RESTORE_FILE"
-  fi
-
-  echo "✅ Restore complete"
-}
 
 
 docker rm -f n8n 2>/dev/null || true
