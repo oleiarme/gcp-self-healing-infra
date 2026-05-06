@@ -1,4 +1,13 @@
 #!/bin/bash
+
+trap 'echo "Graceful shutdown...";
+
+docker stop --time=30 n8n 2>/dev/null || true
+docker stop --time=20 cloudflared 2>/dev/null || true
+docker stop --time=30 postgres 2>/dev/null || true
+
+exit 0' SIGTERM SIGINT
+
 set -e
 set -o pipefail
 set -u
@@ -51,6 +60,46 @@ echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
 # ==========================================
 # 0. Utility functions
 # ==========================================
+
+check_db_health() {
+  echo "=== DB HEALTH CHECK (optimized) ==="
+
+  RESULT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tA -F',' -c "
+SELECT
+  EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='migrations'),
+  COALESCE((SELECT COUNT(*) FROM migrations), 0),
+  EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='workflow_entity'),
+  COALESCE((SELECT COUNT(*) FROM workflow_entity), 0),
+  EXISTS (SELECT 1 FROM pg_indexes WHERE tablename='workflow_entity' AND indexname LIKE '%pkey%');
+" 2>/dev/null || echo "")
+
+  if [ -z "$RESULT" ]; then
+    echo "❌ DB connection failed"
+    return 1
+  fi
+
+  IFS=',' read -r MIG_EXISTS MIG_COUNT WF_EXISTS WF_COUNT PK_EXISTS <<< "$RESULT"
+
+  echo "DEBUG: migrations=$MIG_EXISTS count=$MIG_COUNT workflow=$WF_EXISTS count=$WF_COUNT pk=$PK_EXISTS"
+
+  if [ "$MIG_EXISTS" != "t" ] || [ "$MIG_COUNT" -lt 1 ]; then
+    echo "❌ migrations invalid"
+    return 1
+  fi
+
+  if [ "$WF_EXISTS" != "t" ] || [ "$WF_COUNT" -lt 1 ]; then
+    echo "❌ workflow invalid"
+    return 1
+  fi
+
+  if [ "$PK_EXISTS" != "t" ]; then
+    echo "❌ PK missing"
+    return 1
+  fi
+
+  echo "✅ DB HEALTHY"
+  return 0
+}
 
 retry() {
   for i in {1..5}; do
@@ -154,55 +203,21 @@ docker run -d \
   --name health-server \
   --network host \
   --restart always \
-  python:3.11-alpine \
+  mirror.gcr.io/library/busybox \
   sh -c '
-    apk add --no-cache curl >/dev/null
-    cat > /health.py << "EOF"
-    #!/usr/bin/env python3
-    import http.server
-    import socket
-    import subprocess
+    while true; do
+      N8N_OK=false; PG_OK=false; CF_OK=false
+      wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 && N8N_OK=true
+      nc -z 127.0.0.1 5432 2>/dev/null && PG_OK=true
+      nc -z 127.0.0.1 2000 2>/dev/null && CF_OK=true
 
-    HOST = "0.0.0.0"
-    PORT = 8080
-
-    def check_n8n():  
-        return subprocess.call(
-            ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=2
-        ) == 0
-
-    def check_postgres():
-        s = socket.socket()
-        s.settimeout(1)
-        try:
-            s.connect(("127.0.0.1", 5432))
-            s.close()
-            return True
-        except:
-            return False
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            ok = check_n8n() and check_postgres()
-
-            if ok:
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"OK")
-            else:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(b"FAIL")
-
-        def log_message(self, format, *args):
-            return  # убрать шум логов
-
-    http.server.ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
-    EOF
-    python3 /health.py
+      if [ "$N8N_OK" = true ] && [ "$PG_OK" = true ] && [ "$CF_OK" = true ]; then
+        echo -e "HTTP/1.1 200 OK\r\n\r\nOK"
+      else
+        echo -e "HTTP/1.1 503\r\n\r\nFAIL"
+      fi
+      sleep 5
+    done | nc -lk -p 8080
   '
 
 docker ps | grep health-server || {
@@ -417,6 +432,9 @@ printf "%s" "$N8N_KEY"     > /dev/shm/n8n-secrets/n8n_key
 printf "%s" "$CF_TOKEN"    > /dev/shm/n8n-secrets/cf_token
 umask 022
 
+chmod 600 /dev/shm/n8n-secrets/*
+chmod 644 /dev/shm/n8n-secrets/db_password  
+
 
 echo "=== Verify Secrets Before Start ==="
 for f in db_password n8n_key cf_token; do
@@ -435,6 +453,9 @@ docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 echo "=== Starting Postgres ==="
 docker run -d \
   --name postgres \
+  --stop-timeout 30 \
+  --memory="256m" \
+  --memory-swap="256m" \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:5432:5432 \
@@ -452,13 +473,11 @@ docker run -d \
 echo "=== Waiting for Postgres ==="
 READY=false
 for i in {1..30}; do
-  if docker exec postgres pg_isready -U "${db_user}" >/dev/null 2>&1 && \
-     docker exec postgres psql -U "${db_user}" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
-    echo "✅ Postgres fully ready"
+  if docker exec postgres pg_isready -U "${db_user}" >/dev/null 2>&1; then
+    echo "✅ Postgres ready"
     READY=true
     break
   fi
-  echo "⏳ waiting postgres ($i/30)..."
   sleep 2
 done
 
@@ -469,200 +488,78 @@ if [ "$READY" != "true" ]; then
   exit 1
 fi
 
+echo "=== DB HEALTH CHECK BEFORE RESTORE ==="
+
+if check_db_health; then
+  echo "→ DB healthy → SKIP restore"
+else
+  echo "→ DB unhealthy → restoring..."
+  restore_db
+fi
+
+check_db_health || exit 1
+
 # ==========================================
 # 9. Backup Restore (DR only)
 # ==========================================
-SKIP_RESTORE=false
+restore_db() {
+  echo "→ Fetching latest backup..."
 
-echo "→ Checking DB state..."
-
-DB_EXISTS=$(timeout 5s docker exec postgres psql \
-  -U "${db_user}" -d postgres \
-  -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}';" \
-  2>/dev/null | xargs || echo "")
-
-echo "DEBUG: DB_EXISTS=$DB_EXISTS"
-
-if [ "$DB_EXISTS" = "1" ]; then
-  echo "→ DB exists. Checking schema integrity..."
-
-  MIGRATIONS_TABLE_EXISTS=$(timeout 5s docker exec postgres psql \
-    -U "${db_user}" -d "${db_name}" \
-    -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='migrations';" \
-    2>/dev/null | xargs || echo "")
-
-  echo "DEBUG: MIGRATIONS_TABLE_EXISTS=$MIGRATIONS_TABLE_EXISTS"
-
-  if [ "$MIGRATIONS_TABLE_EXISTS" = "1" ]; then
-
-    MIGRATION_COUNT=$(timeout 5s docker exec postgres psql \
-      -U "${db_user}" -d "${db_name}" \
-      -tAc "SELECT COUNT(*) FROM migrations;" \
-      2>/dev/null | xargs || echo "0")
-
-    echo "DEBUG: MIGRATION_COUNT=$MIGRATION_COUNT"
-
-    if [ "$MIGRATION_COUNT" -gt 0 ] 2>/dev/null; then
-
-      WORKFLOW_TABLE_EXISTS=$(timeout 15s docker exec postgres psql \
-        -U "${db_user}" -d "${db_name}" \
-        -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='workflow_entity';" \
-        2>/dev/null | xargs || echo "")
-
-      echo "DEBUG: WORKFLOW_TABLE_EXISTS=$WORKFLOW_TABLE_EXISTS"
-
-      if [ "$WORKFLOW_TABLE_EXISTS" = "1" ]; then
-
-        WORKFLOW_COUNT=$(timeout 5s docker exec postgres psql \
-          -U "${db_user}" -d "${db_name}" \
-          -tAc "SELECT COUNT(*) FROM workflow_entity;" \
-          2>/dev/null | xargs || echo "0")
-
-        echo "DEBUG: WORKFLOW_COUNT=$WORKFLOW_COUNT"
-
-        if [ "$WORKFLOW_COUNT" -gt 0 ] 2>/dev/null; then
-          echo "✅ DB healthy ($MIGRATION_COUNT migrations, $WORKFLOW_COUNT workflows) → SKIP restore"
-          SKIP_RESTORE=true
-        else
-          echo "⚠️ workflow_entity empty → restore required"
-        fi
-
-      else
-        echo "⚠️ workflow_entity table missing → restore required"
-      fi
-
-    else
-      echo "⚠️ migrations table empty → restore required"
-    fi
-
-  else
-    echo "⚠️ migrations table missing → restore required"
-  fi
-
-else
-  echo "⚠️ DB does not exist → restore required"
-fi
-
-
-echo "=== Smart DB Check ==="
-
-HAS_TABLE=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "
-SELECT EXISTS (
-  SELECT 1 FROM information_schema.tables
-  WHERE table_name='workflow_entity'
-);
-" | xargs)
-
-if [ "$HAS_TABLE" = "t" ]; then
-  COUNT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tAc "
-  SELECT COUNT(*) FROM workflow_entity;
-  " | xargs)
-
-  if [ "$COUNT" -gt 0 ]; then
-    echo "✅ DB already has data ($COUNT workflows) → SKIP restore"
-    SKIP_RESTORE=true
-  else
-    echo "⚠️ Table exists but empty → restore needed"
-  fi
-else
-  echo "⚠️ n8n tables missing → restore needed"
-fi
-# ==========================================
-# RESTORE ENTRY POINT
-# ==========================================
-if [ "$SKIP_RESTORE" != "true" ]; then
-  echo "→ DB not healthy or missing → restore required"
-  echo "=== CLEAN DB BEFORE RESTORE ==="
-  docker exec postgres psql -U "${db_user}" -d "${db_name}" \
-    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-  echo "=== ENTER RESTORE BLOCK ==="
-
-  echo "→ Requesting backup list from GCS..."
   TOKEN=$(get_token)
 
-  BACKUP_INFO=$(timeout 20 curl -sf \
+  BACKUP_INFO=$(curl -fs \
     -H "Authorization: Bearer $TOKEN" \
-    "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-") || true
+    "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-" \
+    || true)
 
-  if [ -z "$BACKUP_INFO" ]; then
-    echo "⚠️ EMPTY BACKUP RESPONSE — skipping restore"
-  else
-    echo "DEBUG: BACKUP_INFO length=${#BACKUP_INFO}"
-    echo "$BACKUP_INFO" | head -c 300 || true
+  LATEST_OBJ=$(echo "$BACKUP_INFO" \
+    | grep -o '"name": "[^"]*' \
+    | cut -d'"' -f4 \
+    | grep -E '\.sql(\.gz)?$' \
+    | sort \
+    | tail -n 1)
 
-    LATEST_OBJ=$(echo "$BACKUP_INFO" \
-      | grep -o '"name": "[^"]*' \
-      | cut -d'"' -f4 \
-      | grep -E '\.(sql|sql\.gz)$' \
-      | sort \
-      | tail -n 1)
-
-    echo "→ Found latest backup: $LATEST_OBJ"
-
-    if [ -z "$LATEST_OBJ" ]; then
-      echo "⚠️ No backup files found in GCS → skipping restore"
-    else
-      RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
-      mkdir -p /mnt/disks/data/tmp
-
-      echo "→ Downloading backup: $LATEST_OBJ"
-      ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
-      TOKEN=$(get_token)
-      curl -sf --max-time 600 \
-        -H "Authorization: Bearer $TOKEN" \
-        "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_OBJ}?alt=media" \
-        -o "$RESTORE_FILE"
-
-      if [ ! -s "$RESTORE_FILE" ]; then
-        echo "❌ Downloaded backup is empty"
-        exit 1
-      fi
-      echo "✅ Backup downloaded ($(du -sh "$RESTORE_FILE" | cut -f1))"
-
-      CHECKSUM_OBJ="${LATEST_OBJ}.sha256"
-      ENCODED_CS=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${CHECKSUM_OBJ}', safe=''))")
-      TOKEN=$(get_token)
-      REMOTE_SUM=$(curl -sf --max-time 30 \
-        -H "Authorization: Bearer $TOKEN" \
-        "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_CS}?alt=media" \
-        2>/dev/null | awk '{print $1}' || true)
-
-      if [ -n "$REMOTE_SUM" ]; then
-        LOCAL_SUM=$(sha256sum "$RESTORE_FILE" | awk '{print $1}')
-        if [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
-          echo "❌ Checksum mismatch — backup corrupt"
-          rm -f "$RESTORE_FILE"
-          exit 1
-        fi
-        echo "✅ Checksum verified"
-      else
-        echo "⚠️ No checksum file found — skipping verification"
-      fi
-
-      echo "→ Detecting backup format..."
-      if file "$RESTORE_FILE" | grep -q 'gzip'; then
-        echo "→ Format: gzip compressed SQL"
-        if ! gunzip -c "$RESTORE_FILE" | docker exec -i postgres psql \
-            -U "${db_user}" -d "${db_name}" --set ON_ERROR_STOP=on; then
-          echo "❌ Restore failed"
-          rm -f "$RESTORE_FILE"
-          exit 1
-        fi
-      else
-        echo "→ Format: plain SQL"
-        if ! docker exec -i postgres psql \
-            -U "${db_user}" -d "${db_name}" --set ON_ERROR_STOP=on < "$RESTORE_FILE"; then
-          echo "❌ Restore failed"
-          rm -f "$RESTORE_FILE"
-          exit 1
-        fi
-      fi
-
-      rm -f "$RESTORE_FILE"
-      echo "✅ Restore completed"
-    fi
+  if [ -z "$LATEST_OBJ" ]; then
+    echo "❌ No backup found → cannot restore"
+    exit 1
   fi
-fi
+
+  echo "→ Latest backup: $LATEST_OBJ"
+
+  RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
+  mkdir -p /mnt/disks/data/tmp
+
+  ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
+  rm -f "$RESTORE_FILE"
+
+  curl -sf \
+    -H "Authorization: Bearer $TOKEN" \
+    "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_OBJ}?alt=media" \
+    -o "$RESTORE_FILE"
+
+  if [ ! -s "$RESTORE_FILE" ]; then
+    echo "❌ Backup empty"
+    exit 1
+  fi
+
+  echo "→ Resetting DB schema before restore"
+
+  docker exec postgres psql -U "${db_user}" -d "${db_name}" \
+    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+  echo "→ Restoring..."
+
+  if file "$RESTORE_FILE" | grep -q gzip; then
+    gunzip -c "$RESTORE_FILE" | timeout 600 docker exec -i postgres psql \
+      -U "${db_user}" -d "${db_name}"
+  else
+    timeout 600 docker exec -i postgres psql \
+      -U "${db_user}" -d "${db_name}" < "$RESTORE_FILE"
+  fi
+
+  echo "✅ Restore complete"
+}
+
 
 docker rm -f n8n 2>/dev/null || true
 docker network inspect n8n-net >/dev/null 2>&1 || \
@@ -672,9 +569,10 @@ docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
 echo "=== Starting n8n ==="
-sleep 10
+
 docker run -d \
   --name n8n \
+  --stop-timeout 30 \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:5678:5678 \
@@ -685,8 +583,8 @@ docker run -d \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
   -e DB_POSTGRESDB_PORT=5432 \
-  -e DB_POSTGRESDB_DATABASE=postgres \
-  -e DB_POSTGRESDB_USER=n8n \
+  -e DB_POSTGRESDB_DATABASE="${db_name}" \
+  -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
   -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
   -e N8N_RUNNERS_ENABLED=false \
@@ -701,7 +599,7 @@ docker run -d \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
-sleep 10
+
 N8N_READY=false
 for i in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
@@ -738,6 +636,9 @@ fi
 echo "=== Starting cloudflared ==="
 docker run -d \
   --name cloudflared \
+  --stop-timeout 30 \
+  --memory="128m" \
+  --memory-swap="128m" \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
@@ -815,7 +716,7 @@ fi
 
 BACKUP_START=$(date +%s)
 docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -c "CHECKPOINT;" 2>/dev/null || true
-timeout 300 docker exec postgres pg_dump -U "$DB_NAME" --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 "$DB_NAME" | gzip > "$FILE"
+timeout 300 docker exec postgres pg_dump -U "$DB_USER" --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 "$DB_NAME" | gzip > "$FILE"
 BACKUP_DURATION=$(( $(date +%s) - BACKUP_START ))
 echo "Backup duration: ${BACKUP_DURATION}s"
 
