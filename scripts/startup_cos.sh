@@ -150,10 +150,61 @@ fi
 docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1 || \
 docker pull mirror.gcr.io/library/busybox
 
-docker run -d --name health-server --restart always --network host \
-  mirror.gcr.io/library/busybox \
-  sh -c "mkdir -p /www && echo 'OK' > /www/index.html && exec httpd -f -p 8080 -h /www"
-sleep 2
+docker run -d \
+  --name health-server \
+  --network host \
+  --restart always \
+  python:3.11-alpine \
+  sh -c '
+    apk add --no-cache curl >/dev/null
+    cat > /health.py << "EOF"
+    #!/usr/bin/env python3
+    import http.server
+    import socket
+    import subprocess
+
+    HOST = "0.0.0.0"
+    PORT = 8080
+
+    def check_n8n():  
+        return subprocess.call(
+            ["curl", "-sf", "http://127.0.0.1:5678/healthz"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2
+        ) == 0
+
+    def check_postgres():
+        s = socket.socket()
+        s.settimeout(1)
+        try:
+            s.connect(("127.0.0.1", 5432))
+            s.close()
+            return True
+        except:
+            return False
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            ok = check_n8n() and check_postgres()
+
+            if ok:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"FAIL")
+
+        def log_message(self, format, *args):
+            return  # убрать шум логов
+
+    http.server.ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    EOF
+    python3 /health.py
+  '
+
 docker ps | grep health-server || {
   echo "❌ health-server failed to start"
   docker logs health-server || true
@@ -345,6 +396,7 @@ POSTGRES_IMAGE="postgres:15-alpine"
 docker image inspect "$POSTGRES_IMAGE" >/dev/null 2>&1 || docker pull "$POSTGRES_IMAGE"
 
 cat <<EOF > /home/docker/runtime.env
+BACKUP_BUCKET=${BACKUP_BUCKET_NAME}
 N8N_TARGET=$N8N_TARGET
 CF_TARGET=$CF_TARGET
 POSTGRES_IMAGE=$POSTGRES_IMAGE
@@ -353,7 +405,7 @@ DB_USER=${db_user}
 DB_PORT=${db_port}
 N8N_PUBLIC_HOST=${n8n_public_host}
 EOF
-chmod 644 /home/docker/runtime.env
+chmod 600 /home/docker/runtime.env
 
 # ==========================================
 # 8. Start Postgres
@@ -364,10 +416,7 @@ printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
 printf "%s" "$N8N_KEY"     > /dev/shm/n8n-secrets/n8n_key
 printf "%s" "$CF_TOKEN"    > /dev/shm/n8n-secrets/cf_token
 umask 022
-chmod 644 /dev/shm/n8n-secrets/db_password
-chmod 644 /dev/shm/n8n-secrets/n8n_key
-chmod 644 /dev/shm/n8n-secrets/cf_token
-chmod 755 /dev/shm/n8n-secrets
+
 
 echo "=== Verify Secrets Before Start ==="
 for f in db_password n8n_key cf_token; do
@@ -629,6 +678,8 @@ docker run -d \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:5678:5678 \
+  --memory="512m" \
+  --memory-swap="512m" \
   -v /dev/shm/n8n-secrets:/run/secrets:ro \
   -v /mnt/disks/data/n8n:/home/node/.n8n \
   -e DB_TYPE=postgresdb \
@@ -638,16 +689,15 @@ docker run -d \
   -e DB_POSTGRESDB_USER=n8n \
   -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
   -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
-  -e N8N_RUNNERS_MODE=disabled \
+  -e N8N_RUNNERS_ENABLED=false \
   -e N8N_RUNNERS_PYTHON_ENABLED=false \
+  -e N8N_RUNNERS_JS_ENABLED=false \
   -e DB_POSTGRESDB_CONNECTION_RETRY_ATTEMPTS=10 \
   -e DB_POSTGRESDB_CONNECTION_RETRY_INTERVAL=2000 \
-  -e N8N_PROJECTS_ENABLED=true \
-  -e N8N_COLLABORATION_ENABLED=true \
+  -e N8N_PROJECTS_ENABLED=false \
+  -e N8N_COLLABORATION_ENABLED=false \
   -e N8N_TEMPLATES_ENABLED=false \
   -e N8N_COMMUNITY_NODES_ENABLED=false \
-  -e N8N_RUNNERS_MODE=internal \
-  -e N8N_RUNNERS_TASK_BROKER_DISABLED=true \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
@@ -690,9 +740,10 @@ docker run -d \
   --name cloudflared \
   --network n8n-net \
   --restart unless-stopped \
-  -e TUNNEL_TOKEN="$(cat /mnt/disks/data/n8n-secrets/cf_token)" \
+  -p 127.0.0.1:2000:2000 \
+  -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
   "$CF_TARGET" \
-  tunnel --no-autoupdate run
+  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
 
 # ==========================================
 # 12. Final health verification
@@ -734,18 +785,23 @@ echo "=== Setup Backup Timer ==="
 cat <<'BACKUPEOF' > /home/docker/backup.sh
 #!/bin/bash
 set -e
+set -u
+
+: "${DB_USER:?missing}"
+: "${DB_NAME:?missing}"
+: "${BACKUP_BUCKET:?missing}"
 TOKEN=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p /mnt/disks/data/tmp
 FILE="/mnt/disks/data/tmp/n8n-${TIMESTAMP}.sql.gz"
 
-COUNT=$(docker exec postgres psql -U DB_USER_PLACEHOLDER -d DB_NAME_PLACEHOLDER -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
+COUNT=$(docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
 if [ "$COUNT" -lt 1 ]; then
   echo "⚠️ SKIP backup: no workflows"
   exit 0
 fi
 
-SIZE=$(docker exec postgres psql -U DB_USER_PLACEHOLDER -d DB_NAME_PLACEHOLDER -t -c "SELECT pg_database_size('DB_NAME_PLACEHOLDER');" | xargs)
+SIZE=$(docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT pg_database_size('$DB_NAME');" | xargs)
 if [ "$SIZE" -lt 1000000 ]; then
   echo "⚠️ SKIP backup: DB too small ($SIZE bytes)"
   exit 0
@@ -758,8 +814,8 @@ if [ "$AVAIL_KB" -lt 512000 ]; then
 fi
 
 BACKUP_START=$(date +%s)
-docker exec postgres psql -U DB_USER_PLACEHOLDER -d DB_NAME_PLACEHOLDER -c "CHECKPOINT;" 2>/dev/null || true
-timeout 300 docker exec postgres pg_dump -U DB_USER_PLACEHOLDER --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 DB_NAME_PLACEHOLDER | gzip > "$FILE"
+docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -c "CHECKPOINT;" 2>/dev/null || true
+timeout 300 docker exec postgres pg_dump -U "$DB_NAME" --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 "$DB_NAME" | gzip > "$FILE"
 BACKUP_DURATION=$(( $(date +%s) - BACKUP_START ))
 echo "Backup duration: ${BACKUP_DURATION}s"
 
@@ -774,16 +830,16 @@ sha256sum "$(basename "$FILE")" > "$FILE.sha256"
 curl --max-time 300 -sf -X POST -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/octet-stream" \
      --data-binary @"$FILE" \
-     "https://storage.googleapis.com/upload/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz"
+     "https://storage.googleapis.com/upload/storage/v1/b/"$BACKUP_BUCKET"/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz"
 
 curl --max-time 60 -sf -X POST -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: text/plain" \
      --data-binary @"$FILE.sha256" \
-     "https://storage.googleapis.com/upload/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz.sha256"
+     "https://storage.googleapis.com/upload/storage/v1/b/"$BACKUP_BUCKET"/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz.sha256"
 
 LOCAL_SUM=$(cat "$FILE.sha256" 2>/dev/null || true)
 REMOTE_SUM=$(curl --max-time 60 -sf -H "Authorization: Bearer $TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o/n8n%2Fn8n-${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
+  "https://storage.googleapis.com/storage/v1/b/"$BACKUP_BUCKET"/o/n8n%2Fn8n-${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
 if [ -n "$REMOTE_SUM" ] && [ -n "$LOCAL_SUM" ] && [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
   echo "❌ Checksum mismatch after upload"
   exit 1
@@ -793,7 +849,7 @@ rm -f "$FILE" "$FILE.sha256"
 
 CUTOFF_DATE=$(date -d '7 days ago' +%Y%m%d)
 OLD_BACKUPS=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o?prefix=n8n/n8n-" \
+  "https://storage.googleapis.com/storage/v1/b/"$BACKUP_BUCKET"/o?prefix=n8n/n8n-" \
   | grep -o '"name": "[^"]*' | cut -d'"' -f4 \
   | grep -E '\.(sql\.gz|sha256)$' || true)
 
@@ -802,7 +858,7 @@ while IFS= read -r obj; do
   if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" -lt "$CUTOFF_DATE" ]; then
     ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$obj', safe=''))")
     curl -sf -X DELETE -H "Authorization: Bearer $TOKEN" \
-      "https://storage.googleapis.com/storage/v1/b/BACKUP_BUCKET_PLACEHOLDER/o/${ENCODED}" || true
+      "https://storage.googleapis.com/storage/v1/b/"$BACKUP_BUCKET"/o/${ENCODED}" || true
     echo "Deleted old backup: $obj"
   fi
 done <<< "$OLD_BACKUPS"
@@ -811,16 +867,16 @@ echo "BACKUP_OK $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 BACKUPEOF
 
 # Inject runtime values into backup.sh
-sed -i "s/DB_USER_PLACEHOLDER/${db_user}/g" /home/docker/backup.sh
-sed -i "s/DB_NAME_PLACEHOLDER/${db_name}/g" /home/docker/backup.sh
-sed -i "s/BACKUP_BUCKET_PLACEHOLDER/${BACKUP_BUCKET_NAME}/g" /home/docker/backup.sh
+
 chmod +x /home/docker/backup.sh
 
 cat <<'SVCEOF' > /etc/systemd/system/n8n-backup.service || true
 [Unit]
 Description=n8n Postgres Backup
+
 [Service]
 Type=oneshot
+EnvironmentFile=/home/docker/runtime.env
 ExecStart=/home/docker/backup.sh
 SVCEOF
 
