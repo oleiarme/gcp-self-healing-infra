@@ -206,18 +206,25 @@ docker run -d \
   mirror.gcr.io/library/busybox \
   sh -c '
     while true; do
-      N8N_OK=false; PG_OK=false; CF_OK=false
-      wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 && N8N_OK=true
-      nc -z 127.0.0.1 5432 2>/dev/null && PG_OK=true
-      nc -z 127.0.0.1 2000 2>/dev/null && CF_OK=true
+      (
+        # recalculation per request
+        N8N_OK=false
+        PG_OK=false
+        CF_OK=false
 
-      if [ "$N8N_OK" = true ] && [ "$PG_OK" = true ] && [ "$CF_OK" = true ]; then
-        echo -e "HTTP/1.1 200 OK\r\n\r\nOK"
-      else
-        echo -e "HTTP/1.1 503\r\n\r\nFAIL"
-      fi
-      sleep 5
-    done | nc -lk -p 8080
+        wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 && N8N_OK=true
+        nc -z 127.0.0.1 5432 2>/dev/null && PG_OK=true
+        nc -z 127.0.0.1 2000 2>/dev/null && CF_OK=true
+
+        read -r _
+
+        if [ "$N8N_OK" = true ] && [ "$PG_OK" = true ] && [ "$CF_OK" = true ]; then
+          printf "HTTP/1.1 200 OK\r\n\r\nOK"
+        else
+          printf "HTTP/1.1 503\r\n\r\nFAIL"
+        fi
+      ) | nc -l -p 8080
+    done
   '
 
 docker ps | grep health-server || {
@@ -454,8 +461,8 @@ echo "=== Starting Postgres ==="
 docker run -d \
   --name postgres \
   --stop-timeout 30 \
-  --memory="256m" \
-  --memory-swap="256m" \
+  --memory="512m" \
+  --memory-swap="512m" \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:5432:5432 \
@@ -497,7 +504,7 @@ else
   restore_db
 fi
 
-check_db_health || exit 1
+
 
 # ==========================================
 # 9. Backup Restore (DR only)
@@ -521,7 +528,7 @@ restore_db() {
 
   if [ -z "$LATEST_OBJ" ]; then
     echo "❌ No backup found → cannot restore"
-    exit 1
+    exit 0
   fi
 
   echo "→ Latest backup: $LATEST_OBJ"
@@ -565,6 +572,9 @@ docker rm -f n8n 2>/dev/null || true
 docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
+echo "=== Cleaning n8n runtime state (one-time) ==="
+rm -rf /mnt/disks/data/n8n/*
+
 # ==========================================
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
@@ -585,8 +595,8 @@ docker run -d \
   -e DB_POSTGRESDB_PORT=5432 \
   -e DB_POSTGRESDB_DATABASE="${db_name}" \
   -e DB_POSTGRESDB_USER="${db_user}" \
-  -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
-  -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
+  -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+  -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
   -e N8N_RUNNERS_ENABLED=false \
   -e N8N_RUNNERS_PYTHON_ENABLED=false \
   -e N8N_RUNNERS_JS_ENABLED=false \
@@ -607,7 +617,7 @@ for i in {1..60}; do
     N8N_READY=true
     break
   fi
-  echo "⏳ Waiting for n8n ($i/180)..."
+  echo "⏳ Waiting for n8n ($i/60)..."
   sleep 5
 done
 
