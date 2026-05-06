@@ -287,3 +287,14 @@ variable "cloudflared_image_tag" {
   type        = string
   default     = "2026.3.0"
 }
+
+variable "db_name" {
+  description = "PostgreSQL database name used by n8n (when not using managed Cloud SQL resource name)"
+  type        = string
+  default     = "n8n"
+
+  validation {
+    condition     = length(var.db_name) > 0
+    error_message = "db_name must not be empty."
+  }
+}
