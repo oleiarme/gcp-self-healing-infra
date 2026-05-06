@@ -2,9 +2,9 @@
 
 trap 'echo "Graceful shutdown...";
 
-docker stop --time=30 n8n 2>/dev/null || true
-docker stop --time=20 cloudflared 2>/dev/null || true
-docker stop --time=30 postgres 2>/dev/null || true
+docker stop --time=30 n8n 2>/dev/null || true;
+docker stop --time=20 cloudflared 2>/dev/null || true;
+docker stop --time=30 postgres 2>/dev/null || true;
 
 exit 0' SIGTERM SIGINT
 
@@ -189,7 +189,7 @@ get_secret() {
   local RAW
   RAW=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
      "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/${SECRET_NAME}/versions/latest:access")
-  DATA=$(printf '%s' "$RAW" | sed -n 's/.*"data": "\([^"]*\)".*/\1/p')
+  DATA=$(echo "$RAW" | jq -r '.payload.data')
 
   if [ -z "$DATA" ]; then
     echo "❌ Secret $SECRET_NAME is empty or invalid"
@@ -494,15 +494,14 @@ umask 077
 mkdir -p /dev/shm/n8n-secrets
 printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
 printf "%s" "$N8N_KEY"     > /dev/shm/n8n-secrets/n8n_key
-printf "%s" "$CF_TOKEN"    > /dev/shm/n8n-secrets/cf_token
 
 
 chown -R 1000:1000 /dev/shm/n8n-secrets
-chmod 600 /dev/shm/n8n-secrets/*  
+chmod 600 /dev/shm/n8n-secrets/*
 
 
 echo "=== Verify Secrets Before Start ==="
-for f in db_password n8n_key cf_token; do
+for f in db_password n8n_key; do
   if [ ! -s "/dev/shm/n8n-secrets/$f" ]; then
     echo "❌ Missing secret: $f"
     exit 1
@@ -581,7 +580,7 @@ rm -rf /mnt/disks/data/n8n/*
 echo "→ Waiting for Postgres before starting n8n..."
 
 for i in {1..60}; do
-  if docker exec postgres pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+  if docker exec postgres pg_isready -U "$db_user" >/dev/null 2>&1; then
     echo "→ Postgres is ready"
     break
   fi
@@ -647,16 +646,12 @@ docker rm -f cloudflared 2>/dev/null || true
 
 mkdir -p /mnt/disks/data/n8n-secrets
 
-if [ -f /dev/shm/n8n-secrets/cf_token ] && [ ! -f /mnt/disks/data/n8n-secrets/cf_token ]; then
-  cp /dev/shm/n8n-secrets/cf_token /mnt/disks/data/n8n-secrets/
-fi
-
-if [ ! -s /mnt/disks/data/n8n-secrets/cf_token ]; then
-  echo "❌ CF token missing"
-  exit 1
-fi
 
 echo "=== Starting cloudflared ==="
+if [ -z "$CF_TOKEN" ]; then
+  echo "❌ CF_TOKEN empty"
+  exit 1
+fi
 docker run -d \
   --name cloudflared \
   --stop-timeout 30 \
@@ -665,9 +660,10 @@ docker run -d \
   --network n8n-net \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
-  -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
   "$CF_TARGET" \
-  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
+  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token "$CF_TOKEN"
+
+
 
 # ==========================================
 # 12. Final health verification
