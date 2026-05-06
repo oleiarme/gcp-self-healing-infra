@@ -592,32 +592,32 @@ done
 echo "=== Starting n8n ==="
 
 docker run -d \
-  --name n8n \
-  --stop-timeout 30 \
-  --network n8n-net \
-  --restart unless-stopped \
-  -p 127.0.0.1:5678:5678 \
-  --memory="800m" \
-  --memory-swap="1.5g" \
-  -v /dev/shm/n8n-secrets:/run/secrets:ro \
-  -v /mnt/disks/data/n8n:/home/node/.n8n \
-  -e DB_TYPE=postgresdb \
-  -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT=5432 \
-  -e DB_POSTGRESDB_DATABASE="${db_name}" \
-  -e DB_POSTGRESDB_USER="${db_user}" \
-  -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
-  -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-  -e N8N_RUNNERS_ENABLED=true \
-  -e N8N_RUNNERS_AUTH_ENABLED=false \
-  -e N8N_RUNNERS_JS_ENABLED=true \
-  -e N8N_RUNNERS_PYTHON_ENABLED=false \
-  -e N8N_PROJECTS_ENABLED=false \
-  -e N8N_COLLABORATION_ENABLED=false \
-  -e N8N_TEMPLATES_ENABLED=false \
-  -e N8N_COMMUNITY_NODES_ENABLED=false \
-  -e NODE_OPTIONS=--max-old-space-size=512 \
-  "$N8N_TARGET"
+      --name n8n \
+      --stop-timeout 30 \
+      --network n8n-net \
+      --restart unless-stopped \
+      -p 127.0.0.1:5678:5678 \
+      --memory="900m" \
+      --memory-swap="2g" \
+      -v /dev/shm/n8n-secrets:/run/secrets:ro \
+      -v /mnt/disks/data/n8n:/home/node/.n8n \
+      -e DB_TYPE=postgresdb \
+      -e DB_POSTGRESDB_HOST=postgres \
+      -e DB_POSTGRESDB_PORT=5432 \
+      -e DB_POSTGRESDB_DATABASE="${db_name}" \
+      -e DB_POSTGRESDB_USER="${db_user}" \
+      -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+      -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
+      -e N8N_RUNNERS_MODE=internal \
+      -e N8N_RUNNERS_JS_ENABLED=true \
+      -e N8N_RUNNERS_PYTHON_ENABLED=false \
+      -e N8N_RUNNERS_MAX_CONCURRENCY=1 \
+      -e N8N_RUNNERS_TASK_TIMEOUT=30 \
+      -e N8N_PROJECTS_ENABLED=false \
+      -e N8N_COLLABORATION_ENABLED=false \
+      -e N8N_TEMPLATES_ENABLED=false \
+      -e N8N_COMMUNITY_NODES_ENABLED=false \
+      "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
 
