@@ -356,7 +356,7 @@ if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
 fi
 
 mkdir -p /mnt/disks/data
-fsck -a "$DATA_DISK" || true
+
 mount -o discard,defaults "$DATA_DISK" /mnt/disks/data
 
 mkdir -p /mnt/disks/data/postgres
@@ -396,7 +396,7 @@ AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
 
 if [ "$AVAIL_KB" -lt 2097152 ]; then
   echo "⚠️ Low disk space on $DOCKER_ROOT ($((AVAIL_KB/1024))MB free). Cleaning..."
-  docker system prune -af --volumes || true
+  docker system prune -af || true
   AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
 fi
 
@@ -573,8 +573,7 @@ docker rm -f n8n 2>/dev/null || true
 docker network inspect n8n-net >/dev/null 2>&1 || \
 docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 
-echo "=== Cleaning n8n runtime state (one-time) ==="
-rm -rf /mnt/disks/data/n8n/*
+
 
 
 echo "→ Waiting for Postgres before starting n8n..."
@@ -591,7 +590,7 @@ done
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
 echo "=== Starting n8n ==="
-  
+
 docker run -d \
   --name n8n \
   --stop-timeout 30 \
@@ -617,14 +616,28 @@ docker run -d \
   -e N8N_COLLABORATION_ENABLED=false \
   -e N8N_TEMPLATES_ENABLED=false \
   -e N8N_COMMUNITY_NODES_ENABLED=false \
+  -e NODE_OPTIONS=--max-old-space-size=512 \
   "$N8N_TARGET"
 
 echo "=== Waiting for n8n ==="
 
 N8N_READY=false
-for i in {1..60}; do
+for startup_retry in {1..60}; do
   if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     echo "✅ n8n is ready"
+    echo "=== Warming up n8n runners ==="
+
+    for warmup_retry in {1..12}; do
+      if curl -sf http://127.0.0.1:5678/rest/settings >/dev/null 2>&1; then
+        echo "✅ API ready"
+        break
+      fi
+
+      echo "⏳ Waiting API warmup ($i/12)..."
+      sleep 5
+    done
+
+sleep 15
     N8N_READY=true
     break
   fi
@@ -645,6 +658,8 @@ docker rm -f cloudflared 2>/dev/null || true
 
 mkdir -p /mnt/disks/data/n8n-secrets
 
+echo "=== n8n warmup ==="
+sleep 5
 
 echo "=== Starting cloudflared ==="
 if [ -z "$CF_TOKEN" ]; then
@@ -660,7 +675,12 @@ docker run -d \
   --restart unless-stopped \
   -p 127.0.0.1:2000:2000 \
   "$CF_TARGET" \
-  tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token "$CF_TOKEN"
+  tunnel \
+  --grace-period 30s \
+  --retries 5 \
+  --protocol http2 \
+  --metrics 0.0.0.0:2000 \
+  run --token "$CF_TOKEN"
 
 
 
@@ -804,7 +824,7 @@ cat <<'TMREOF' > /etc/systemd/system/n8n-backup.timer || true
 Description=Run n8n Backup every 10 min
 [Timer]
 OnBootSec=15min
-OnUnitActiveSec=10min
+OnUnitActiveSec=60min
 [Install]
 WantedBy=timers.target
 TMREOF
