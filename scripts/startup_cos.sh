@@ -634,7 +634,7 @@ docker run -d \
   -e N8N_RUNNERS_ENABLED=false \
   -e N8N_RUNNERS_PYTHON_ENABLED=false \
   -e N8N_RUNNERS_JS_ENABLED=false \
-  -e N8N_LOG_LEVEL=debug \
+  -e N8N_LOG_LEVEL=info \
   -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
   -e N8N_PROJECTS_ENABLED=false \
   -e N8N_COLLABORATION_ENABLED=false \
