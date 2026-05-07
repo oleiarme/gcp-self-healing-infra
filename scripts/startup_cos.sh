@@ -257,26 +257,23 @@ fi
 docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1 || \
 docker pull mirror.gcr.io/library/busybox
 
+
 docker run -d \
   --name health-server \
   --network host \
   --restart always \
   mirror.gcr.io/library/busybox \
   sh -c '
-    exec sh -c "
     while true; do
-      (
-        read -r _
+      if wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+        RESPONSE="HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nOK"
+      else
+        echo "$(date) health failed" >&2
+        RESPONSE="HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\nFAIL"
+      fi
 
-        if wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
-          printf "HTTP/1.1 200 OK\r\n\r\nOK"
-        else
-          echo "$(date) health failed" >&2
-          printf "HTTP/1.1 503 Service Unavailable\r\n\r\nFAIL"
-        fi
-      ) | nc -l -p 8080 -w 1
+      printf "%b" "$RESPONSE" | nc -l -p 8080 -w 1
     done
-  "
   '
 
 docker ps | grep health-server || {
