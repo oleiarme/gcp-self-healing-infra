@@ -609,7 +609,7 @@ done
 # 10. Start n8n (no queue mode, no Redis, no worker)
 # ==========================================
 echo "=== Starting n8n ==="
-N8N_RUNNER_TOKEN="my-secret-token-12345"
+#N8N_RUNNER_TOKEN="my-secret-token-12345"
 docker run -d \
   --name n8n \
   --stop-timeout 30 \
@@ -631,13 +631,13 @@ docker run -d \
   -e N8N_RUNNERS_JS_ENABLED=true \
   -e N8N_RUNNERS_PYTHON_ENABLED=false \
   -e N8N_RUNNERS_MAX_CONCURRENCY=1 \
-  -e N8N_RUNNERS_AUTH_ENABLED=true \
-  -e N8N_RUNNERS_AUTH_TOKEN="${N8N_RUNNER_TOKEN}" \
   -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
   -e N8N_PROJECTS_ENABLED=false \
   -e N8N_COLLABORATION_ENABLED=false \
   -e N8N_TEMPLATES_ENABLED=false \
-  -e N8N_COMMUNITY_NODES_ENABLED=false \
+  -e N8N_COMMUNITY_PACKAGES_ENABLED=false \
+  -e N8N_DIAGNOSTICS_ENABLED=false \
+  -e N8N_VERSION_NOTIFICATIONS_ENABLED=false \
   -e NODE_OPTIONS="--max-old-space-size=384" \
   "$N8N_TARGET"
 
