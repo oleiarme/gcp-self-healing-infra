@@ -81,6 +81,7 @@ jobs:
             --verbose
       - name: Dump MIG state on failure
         if: failure()
+        continue-on-error: true
         run: |
           echo "=== MIG INSTANCES ==="
 
