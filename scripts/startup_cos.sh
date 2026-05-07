@@ -649,6 +649,8 @@ docker run -d \
   -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
   -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
   -e N8N_RUNNERS_ENABLED=false \
+  -e N8N_RUNNERS_PYTHON_ENABLED=false \
+  -e N8N_RUNNERS_JS_ENABLED=false \
   -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
   -e N8N_PROJECTS_ENABLED=false \
   -e N8N_COLLABORATION_ENABLED=false \
