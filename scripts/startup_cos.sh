@@ -623,7 +623,7 @@ docker run -d \
   -e N8N_RUNNERS_MODE=internal \
   -e N8N_RUNNERS_JS_ENABLED=true \
   -e N8N_RUNNERS_PYTHON_ENABLED=false \
-  -e N8N_RUNNERS_MAX_CONCURRENCY=1 \
+  -e N8N_RUNNERS_MAX_CONCURRENCY=2 \
   -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
   -e N8N_PROJECTS_ENABLED=false \
   -e N8N_COLLABORATION_ENABLED=false \
@@ -631,7 +631,7 @@ docker run -d \
   -e N8N_COMMUNITY_PACKAGES_ENABLED=false \
   -e N8N_DIAGNOSTICS_ENABLED=false \
   -e N8N_VERSION_NOTIFICATIONS_ENABLED=false \
-  -e NODE_OPTIONS="--max-old-space-size=384" \
+  -e NODE_OPTIONS="--max-old-space-size=512" \
   "$N8N_TARGET"
 
 
