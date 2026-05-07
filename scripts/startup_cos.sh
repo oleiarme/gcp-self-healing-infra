@@ -265,21 +265,13 @@ docker run -d \
   sh -c '
     while true; do
       (
-        # recalculation per request
-        N8N_OK=false
-        PG_OK=false
-        CF_OK=false
-
-        wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 && N8N_OK=true
-        nc -z 127.0.0.1 5432 2>/dev/null && PG_OK=true
-        curl -sf http://127.0.0.1:2000/ready >/dev/null 2>&1 && CF_OK=true
-
         read -r _
 
-        if [ "$N8N_OK" = true ] && [ "$PG_OK" = true ] && [ "$CF_OK" = true ]; then
+        if wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
           printf "HTTP/1.1 200 OK\r\n\r\nOK"
         else
-          printf "HTTP/1.1 503\r\n\r\nFAIL"
+          echo "$(date) health failed" >&2
+          printf "HTTP/1.1 503 Service Unavailable\r\n\r\nFAIL"
         fi
       ) | nc -l -p 8080
     done
