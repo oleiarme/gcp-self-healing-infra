@@ -279,7 +279,7 @@ variable "disk_size_gb" {
 variable "n8n_image_tag" {
   description = "Tag for the n8n image"
   type        = string
-  default     = "2.18.6"
+  default     = "2.19.4"
 }
 
 variable "cloudflared_image_tag" {
