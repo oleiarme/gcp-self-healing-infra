@@ -217,19 +217,46 @@ EOF
 DOCKER_READY_FILE="/var/run/docker-initialized"
 
 if [ ! -f "$DOCKER_READY_FILE" ]; then
-  echo "=== Initial Docker restart ==="
-  systemctl restart docker
+  echo "=== Initial Docker bootstrap ==="
+
+  # restart ONLY if docker unhealthy
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon unhealthy → restarting"
+    systemctl restart docker
+  else
+    echo "Docker daemon already healthy"
+  fi
+
+  echo "=== Waiting for Docker daemon ==="
 
   for i in {1..30}; do
-    docker info >/dev/null 2>&1 && break
+    if docker info >/dev/null 2>&1; then
+      echo "✅ Docker daemon ready"
+      break
+    fi
+
+    echo "⏳ Waiting Docker daemon ($i/30)..."
     sleep 2
   done
 
-  sleep 5
-  touch "$DOCKER_READY_FILE"
+  echo "=== Waiting for Docker networking ==="
+
+  for i in {1..30}; do
+    if docker run --rm --network host mirror.gcr.io/library/busybox true >/dev/null 2>&1; then
+      echo "✅ Docker networking ready"
+      break
+    fi
+
+    echo "⏳ Waiting Docker networking ($i/30)..."
+    sleep 2
+  done
+
   ip link set dev eth0 mtu 1460 || true
+
+  touch "$DOCKER_READY_FILE"
+
 else
-  echo "=== Docker already initialized, skipping restart ==="
+  echo "=== Docker already initialized, skipping bootstrap ==="
 fi
 
 docker info | grep "Docker Root Dir"
