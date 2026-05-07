@@ -189,7 +189,7 @@ get_secret() {
   local RAW
   RAW=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
      "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/${SECRET_NAME}/versions/latest:access")
-  DATA=$(echo "$RAW" | jq -r '.payload.data')
+  DATA=$(echo "$RAW" | python3 -c "import sys, json; print(json.load(sys.stdin)['payload']['data'])")
 
   if [ -z "$DATA" ]; then
     echo "❌ Secret $SECRET_NAME is empty or invalid"
@@ -651,6 +651,7 @@ docker run -d \
   -e N8N_RUNNERS_ENABLED=false \
   -e N8N_RUNNERS_PYTHON_ENABLED=false \
   -e N8N_RUNNERS_JS_ENABLED=false \
+  -e N8N_LOG_LEVEL=debug \
   -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
   -e N8N_PROJECTS_ENABLED=false \
   -e N8N_COLLABORATION_ENABLED=false \
