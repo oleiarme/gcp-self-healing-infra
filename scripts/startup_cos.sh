@@ -263,6 +263,7 @@ docker run -d \
   --restart always \
   mirror.gcr.io/library/busybox \
   sh -c '
+    exec sh -c "
     while true; do
       (
         read -r _
@@ -273,8 +274,9 @@ docker run -d \
           echo "$(date) health failed" >&2
           printf "HTTP/1.1 503 Service Unavailable\r\n\r\nFAIL"
         fi
-      ) | nc -l -p 8080
+      ) | nc -l -p 8080 -w 1
     done
+  "
   '
 
 docker ps | grep health-server || {
@@ -526,6 +528,7 @@ docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
 echo "=== Starting Postgres ==="
 docker run -d \
   --name postgres \
+  --oom-score-adj -900 \
   --stop-timeout 30 \
   --memory="512m" \
   --memory-swap="512m" \
@@ -604,6 +607,7 @@ echo "=== Starting n8n ==="
 #N8N_RUNNER_TOKEN="my-secret-token-12345"
 docker run -d \
   --name n8n \
+  --oom-score-adj 200 \
   --stop-timeout 30 \
   --network n8n-net \
   --restart unless-stopped \
@@ -615,8 +619,8 @@ docker run -d \
   -e DB_TYPE=postgresdb \
   -e DB_POSTGRESDB_HOST=postgres \
   -e DB_POSTGRESDB_PORT=5432 \
-  -e DB_POSTGRESDB_DATABASE=postgres \
-  -e DB_POSTGRESDB_USER=n8n \
+  -e DB_POSTGRESDB_DATABASE="${db_name}" \
+  -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
   -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
   -e N8N_RUNNERS_MODE=internal \
