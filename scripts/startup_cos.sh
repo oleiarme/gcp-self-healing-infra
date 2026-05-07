@@ -254,6 +254,7 @@ if [ ! -f "$DOCKER_READY_FILE" ]; then
   ip link set dev eth0 mtu 1460 || true
 
   touch "$DOCKER_READY_FILE"
+  sync
 
 else
   echo "=== Docker already initialized, skipping bootstrap ==="
@@ -647,10 +648,7 @@ docker run -d \
   -e DB_POSTGRESDB_USER="${db_user}" \
   -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
   -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-  -e N8N_RUNNERS_MODE=internal \
-  -e N8N_RUNNERS_JS_ENABLED=true \
-  -e N8N_RUNNERS_PYTHON_ENABLED=false \
-  -e N8N_RUNNERS_MAX_CONCURRENCY=2 \
+  -e N8N_RUNNERS_ENABLED=false \
   -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
   -e N8N_PROJECTS_ENABLED=false \
   -e N8N_COLLABORATION_ENABLED=false \
