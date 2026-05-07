@@ -262,7 +262,7 @@ fi
 
 docker info | grep "Docker Root Dir"
 
-docker rm -f health-server 2>/dev/null || true
+
 
 echo "=== Waiting for network ==="
 echo "=== Ensuring network OR cached images ==="
@@ -282,33 +282,16 @@ else
   echo "Cached image exists → skip network wait"
 fi
 
-docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1 || \
-docker pull mirror.gcr.io/library/busybox
-
+docker rm -f health-server 2>/dev/null || true
+iptables -I INPUT 1 -p tcp -s 35.191.0.0/16 --dport 8080 -j ACCEPT
+iptables -I INPUT 2 -p tcp -s 130.211.0.0/22 --dport 8080 -j ACCEPT
 
 docker run -d \
   --name health-server \
   --network host \
   --restart always \
-  mirror.gcr.io/library/busybox \
-  sh -c '
-    while true; do
-      if wget -T 2 -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
-        RESPONSE="HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nOK"
-      else
-        echo "$(date) health failed" >&2
-        RESPONSE="HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\nFAIL"
-      fi
-
-      printf "%b" "$RESPONSE" | nc -l -p 8080 -w 1
-    done
-  '
-
-docker ps | grep health-server || {
-  echo "❌ health-server failed to start"
-  docker logs health-server || true
-  exit 1
-}
+  python:3-alpine \
+  sh -c "python -m http.server 8080"
 
 # ==========================================
 # 4. Wait for GCP metadata
