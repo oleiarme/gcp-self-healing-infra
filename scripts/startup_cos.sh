@@ -643,9 +643,12 @@ docker run -d \
   -e N8N_DIAGNOSTICS_ENABLED=false \
   -e N8N_VERSION_NOTIFICATIONS_ENABLED=false \
   -e NODE_OPTIONS="--max-old-space-size=512" \
+  -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+  -e EXECUTIONS_DATA_PRUNE=true \
+  -e EXECUTIONS_DATA_MAX_AGE=24 \
   "$N8N_TARGET"
 
-
+  
 echo "=== Verifying n8n runtime permissions ==="
 
 docker exec n8n sh -c '
