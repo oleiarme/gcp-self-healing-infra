@@ -2,3 +2,6 @@
 *.tfstate.backup
 .terraform/
 terraform.tfvars
+.history/
+.kilo/
+.gitnexus/

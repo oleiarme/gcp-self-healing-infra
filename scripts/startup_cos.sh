@@ -614,40 +614,32 @@ done
 echo "=== Starting n8n ==="
 #N8N_RUNNER_TOKEN="my-secret-token-12345"
 docker run -d \
-  --name n8n \
-  --oom-score-adj 200 \
-  --stop-timeout 30 \
-  --network n8n-net \
-  --restart unless-stopped \
-  -p 127.0.0.1:5678:5678 \
-  --memory="900m" \
-  --memory-swap="1500m" \
-  -v /dev/shm/n8n-secrets:/run/secrets:ro \
-  -v /mnt/disks/data/n8n:/home/node/.n8n \
-  -e DB_TYPE=postgresdb \
-  -e DB_POSTGRESDB_HOST=postgres \
-  -e DB_POSTGRESDB_PORT=5432 \
-  -e DB_POSTGRESDB_DATABASE="${db_name}" \
-  -e DB_POSTGRESDB_USER="${db_user}" \
-  -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
-  -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-  -e N8N_RUNNERS_MODE=external \
-  -e N8N_RUNNERS_AUTH_TOKEN=no-runners-spawned \
-  -e N8N_RUNNERS_PYTHON_ENABLED=false \
-  -e N8N_RUNNERS_JS_ENABLED=false \
-  -e N8N_LOG_LEVEL=info \
-  -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
-  -e N8N_PROJECTS_ENABLED=false \
-  -e N8N_COLLABORATION_ENABLED=false \
-  -e N8N_TEMPLATES_ENABLED=false \
-  -e N8N_COMMUNITY_PACKAGES_ENABLED=false \
-  -e N8N_DIAGNOSTICS_ENABLED=false \
-  -e N8N_VERSION_NOTIFICATIONS_ENABLED=false \
-  -e NODE_OPTIONS="--max-old-space-size=512" \
-  -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
-  -e EXECUTIONS_DATA_PRUNE=true \
-  -e EXECUTIONS_DATA_MAX_AGE=24 \
-  "$N8N_TARGET"
+      --name n8n \
+      --init \
+      --oom-score-adj 200 \
+      --stop-timeout 30 \
+      --network n8n-net \
+      --restart unless-stopped \
+      -p 127.0.0.1:5678:5678 \
+      --memory="900m" \
+      --memory-swap="1500m" \
+      -v /dev/shm/n8n-secrets:/run/secrets:ro \
+      -v /mnt/disks/data/n8n:/home/node/.n8n \
+      -e DB_TYPE=postgresdb \
+      -e DB_POSTGRESDB_HOST=postgres \
+      -e DB_POSTGRESDB_PORT=5432 \
+      -e DB_POSTGRESDB_DATABASE="${db_name}" \
+      -e DB_POSTGRESDB_USER="${db_user}" \
+      -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+      -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
+      -e N8N_RUNNERS_MODE=off \
+      -e N8N_LOG_LEVEL=info \
+      -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
+      -e NODE_OPTIONS="--max-old-space-size=512" \
+      -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+      -e EXECUTIONS_DATA_PRUNE=true \
+      -e EXECUTIONS_DATA_MAX_AGE=24 \
+      "$N8N_TARGET"
 
   
 echo "=== Verifying n8n runtime permissions ==="
