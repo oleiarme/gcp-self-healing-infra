@@ -632,10 +632,13 @@ docker run -d \
       -e DB_POSTGRESDB_USER="${db_user}" \
       -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
       -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-      -e N8N_RUNNERS_MODE=off \
+      -e N8N_RUNNERS_MODE=internal \
+      -e N8N_RUNNERS_AUTO_SHUTDOWN_TIMEOUT=1 \
+      -e N8N_RUNNERS_MAX_CONCURRENCY=1 \
+      -e N8N_RUNNERS_TASK_TIMEOUT=60 \
       -e N8N_RUNNERS_ENABLED=false \
       -e N8N_RUNNERS_TASK_BROKER_URI="http://localhost:1" \
-      -e N8N_LOG_LEVEL=info \
+      -e N8N_LOG_LEVEL=warn \
       -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
       -e NODE_OPTIONS="--max-old-space-size=512" \
       -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
