@@ -8,15 +8,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-
-env:
-  # Single source of truth for hardcoded defaults when GitHub Variables are empty.
-  # Update these only when bumping the baseline version for the entire repo.
-  DEFAULT_N8N_IMAGE: "docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b"
-  DEFAULT_N8N_TAG: "2.19.5"
-  DEFAULT_CF_IMAGE: "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
-  DEFAULT_CF_TAG: "2026.3.0"
-
 jobs:
   terraform:
     runs-on: ubuntu-latest
@@ -38,15 +29,10 @@ jobs:
       REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
       AR_REPO: n8n-docker
       # Resolve image refs: GitHub var > workflow default (mirrors variables.tf)
-      N8N_IMAGE: ${{ vars.TF_VAR_n8n_image || env.DEFAULT_N8N_IMAGE }}
-      CF_IMAGE: ${{ vars.TF_VAR_cloudflared_image || env.DEFAULT_CF_IMAGE }}
-      N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || env.DEFAULT_N8N_TAG }}
-      CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || env.DEFAULT_CF_TAG }}
-      # Terraform auto-picks these up via TF_VAR_ prefix
-      TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image || env.DEFAULT_N8N_IMAGE }}
-      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || env.DEFAULT_N8N_TAG }}
-      TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image || env.DEFAULT_CF_IMAGE }}
-      TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || env.DEFAULT_CF_TAG }}
+      TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b' }}
+      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '2.19.5' }}
+      TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
+      TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
       TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
       TF_VAR_region: ${{ vars.TF_VAR_region || 'us-central1' }}
       TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
@@ -108,10 +94,10 @@ jobs:
           fi
           gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
           # Digest-short prefix (first 8 chars) — mirrors terraform locals
-          N8N_DS="${N8N_IMAGE##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
-          CF_DS="${CF_IMAGE##*@sha256:}"; CF_DS="${CF_DS:0:8}"
-          for PAIR in "${N8N_IMAGE} ${AR}/n8n:${N8N_TAG}-${N8N_DS}" \
-                      "${CF_IMAGE} ${AR}/cloudflared:${CF_TAG}-${CF_DS}"; do
+          N8N_DS="${TF_VAR_n8n_image##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
+          CF_DS="${TF_VAR_cloudflared_image##*@sha256:}"; CF_DS="${CF_DS:0:8}"
+          for PAIR in "${TF_VAR_n8n_image} ${AR}/n8n:${TF_VAR_n8n_image_tag}-${N8N_DS}" \
+                      "${TF_VAR_cloudflared_image} ${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}"; do
             SRC="${PAIR%% *}"
             DST="${PAIR#* }"
             echo ">>> Mirroring ${SRC} → ${DST}"
@@ -130,20 +116,20 @@ jobs:
           echo ">>> Verifying images in Artifact Registry..."
 
           gcloud artifacts docker images list "${AR}/n8n" --include-tags \
-            --format="get(TAGS)" | grep "${N8N_TAG}-${N8N_DS}"
+            --format="get(TAGS)" | grep "${TF_VAR_n8n_image_tag}-${N8N_DS}"
 
           gcloud artifacts docker images list "${AR}/cloudflared" --include-tags \
-            --format="get(TAGS)" | grep "${CF_TAG}-${CF_DS}"
+            --format="get(TAGS)" | grep "${TF_VAR_cloudflared_image_tag}-${CF_DS}"
           echo ">>> Testing docker pull from Artifact Registry..."
 
           for i in {1..5}; do
-            docker pull "${AR}/n8n:${N8N_TAG}-${N8N_DS}" && break
+            docker pull "${AR}/n8n:${TF_VAR_n8n_image_tag}-${N8N_DS}" && break
             echo "Pull retry $i..."
             sleep 5
           done
 
           for i in {1..5}; do
-            docker pull "${AR}/cloudflared:${CF_TAG}-${CF_DS}" && break
+            docker pull "${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}" && break
             echo "Pull retry $i..."
             sleep 5
           done

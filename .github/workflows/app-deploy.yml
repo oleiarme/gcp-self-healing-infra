@@ -26,13 +26,6 @@ concurrency:
   group: app-deploy
   cancel-in-progress: false
 
-env:
-  # Single source of truth for hardcoded defaults when GitHub Variables/Inputs are empty.
-  DEFAULT_N8N_IMAGE: "docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b"
-  DEFAULT_N8N_TAG: "2.19.5"
-  DEFAULT_CF_IMAGE: "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
-  DEFAULT_CF_TAG: "2026.3.0"
-
 jobs:
   deploy:
     name: In-Place Deploy
@@ -47,10 +40,10 @@ jobs:
       ZONE: ${{ vars.TF_VAR_zone || 'us-central1-a' }}
       AR_REPO: n8n-docker
       # Resolve image refs: workflow input > GitHub var > workflow default
-      N8N_IMAGE: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || env.DEFAULT_N8N_IMAGE }}
-      CF_IMAGE: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || env.DEFAULT_CF_IMAGE }}
-      N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || env.DEFAULT_N8N_TAG }}
-      CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || env.DEFAULT_CF_TAG }}
+      TF_VAR_n8n_image: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b' }}
+      TF_VAR_cloudflared_image: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
+      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '2.19.5' }}
+      TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
     steps:
       - uses: actions/checkout@v6
       - name: Auth to GCP
@@ -74,10 +67,10 @@ jobs:
             exit 0
           fi
           gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
-          N8N_DS="${N8N_IMAGE##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
-          CF_DS="${CF_IMAGE##*@sha256:}"; CF_DS="${CF_DS:0:8}"
-          for PAIR in "${N8N_IMAGE} ${AR}/n8n:${N8N_TAG}-${N8N_DS}" \
-                      "${CF_IMAGE} ${AR}/cloudflared:${CF_TAG}-${CF_DS}"; do
+          N8N_DS="${TF_VAR_n8n_image##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
+          CF_DS="${TF_VAR_cloudflared_image##*@sha256:}"; CF_DS="${CF_DS:0:8}"
+          for PAIR in "${TF_VAR_n8n_image} ${AR}/n8n:${TF_VAR_n8n_image_tag}-${N8N_DS}" \
+                      "${TF_VAR_cloudflared_image} ${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}"; do
             SRC="${PAIR%% *}"
             DST="${PAIR#* }"
             echo ">>> Mirroring ${SRC} → ${DST}"
@@ -111,15 +104,15 @@ jobs:
           set -eo pipefail
           # Build AR image refs (same logic as startup.sh locals)
           AR="${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}"
-          N8N_DS="${N8N_IMAGE##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
-          CF_DS="${CF_IMAGE##*@sha256:}"; CF_DS="${CF_DS:0:8}"
-          AR_N8N="${AR}/n8n:${N8N_TAG}-${N8N_DS}"
-          AR_CF="${AR}/cloudflared:${CF_TAG}-${CF_DS}"
+          N8N_DS="${TF_VAR_n8n_image##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
+          CF_DS="${TF_VAR_cloudflared_image##*@sha256:}"; CF_DS="${CF_DS:0:8}"
+          AR_N8N="${AR}/n8n:${TF_VAR_n8n_image_tag}-${N8N_DS}"
+          AR_CF="${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}"
           gcloud compute ssh "${{ steps.vm.outputs.instance }}" \
             --zone="${{ steps.vm.outputs.zone }}" \
             --project="${PROJECT}" \
             --tunnel-through-iap \
-            --command="sudo env N8N_PRIMARY='${AR_N8N}' N8N_FALLBACK='${N8N_IMAGE}' CF_PRIMARY='${AR_CF}' CF_FALLBACK='${CF_IMAGE}' bash -s" <<'REMOTE'
+            --command="sudo env N8N_PRIMARY='${AR_N8N}' N8N_FALLBACK='${TF_VAR_n8n_image}' CF_PRIMARY='${AR_CF}' CF_FALLBACK='${TF_VAR_cloudflared_image}' bash -s" <<'REMOTE'
               set -eo pipefail
               echo '=== In-Place Deploy ==='
 
