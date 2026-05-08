@@ -121,6 +121,9 @@ jobs:
               fi
               # shellcheck disable=SC1091
               . /home/docker/runtime.env
+              # Resolve DB name/user from runtime.env (set by startup_cos.sh from GCP metadata)
+              DB_NAME="${db_name:-n8n}"
+              DB_USER="${db_user:-n8n}"
 
               pull_with_fallback() {
                 local name="$1"
@@ -154,10 +157,10 @@ jobs:
                 -e DB_TYPE=postgresdb \
                 -e DB_POSTGRESDB_HOST=postgres \
                 -e DB_POSTGRESDB_PORT=5432 \
-                -e DB_POSTGRESDB_DATABASE=postgres \
-                -e DB_POSTGRESDB_USER=n8n \
-                -e DB_POSTGRESDB_PASSWORD="$(cat /dev/shm/n8n-secrets/db_password)" \
-                -e N8N_ENCRYPTION_KEY="$(cat /dev/shm/n8n-secrets/n8n_key)" \
+                -e DB_POSTGRESDB_DATABASE="${DB_NAME}" \
+                -e DB_POSTGRESDB_USER="${DB_USER}" \
+                -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
+                -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
                 -e N8N_RUNNERS_ENABLED=false \
                 -e N8N_RUNNERS_PYTHON_ENABLED=false \
                 -e N8N_RUNNERS_JS_ENABLED=false \

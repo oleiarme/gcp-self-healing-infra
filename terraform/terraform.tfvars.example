@@ -1,0 +1,103 @@
+# =============================================================================
+# terraform.tfvars.example
+# =============================================================================
+# Copy this file to terraform.tfvars (gitignored) and fill in your values.
+# terraform.tfvars is NOT committed to git.
+#
+# REQUIRED: project_id, db_user, db_password, n8n_encryption_key,
+#           CF_TUNNEL_TOKEN, n8n_public_host, oncall_email,
+#           wif_allowed_repository, github_repository_url, backup_bucket_name
+#
+# OPTIONAL: all others have sensible defaults.
+# =============================================================================
+
+# --------------------------------------------------------
+# GCP Project
+# --------------------------------------------------------
+
+project_id = "your-project-id"
+
+# Billing account for cost guardrails (optional).
+# Format: AAAAAA-BBBBBB-CCCCCC
+billing_account_id = ""
+
+# --------------------------------------------------------
+# Networking & Region
+# --------------------------------------------------------
+
+region = "us-central1"
+zone   = "us-central1-a"
+
+# --------------------------------------------------------
+# Database Mode (choose one)
+# --------------------------------------------------------
+
+# Mode A: Docker PostgreSQL on VM (default, Free Tier)
+cloud_sql_managed = false
+db_host           = ""
+
+# Mode B: Cloud SQL managed (opt-in). See cloud_sql.tf for import workflow.
+# cloud_sql_managed         = true
+# cloud_sql_private_network = "projects/YOUR_PROJECT/global/networks/default"
+# db_host                   = ""  # auto-filled from Cloud SQL private IP
+
+db_user     = "n8n"
+db_password = "your-secure-password-min-16-chars"
+
+# --------------------------------------------------------
+# n8n Application
+# --------------------------------------------------------
+
+# 32+ random chars. Generate: openssl rand -base64 32
+n8n_encryption_key = "your-32-char-random-key-here"
+
+# Public FQDN via Cloudflare Tunnel
+n8n_public_host = "n8n.example.com"
+
+# --------------------------------------------------------
+# Cloudflare Tunnel
+# --------------------------------------------------------
+
+CF_TUNNEL_TOKEN = "your-cloudflare-tunnel-token"
+
+# --------------------------------------------------------
+# Backup Storage
+# --------------------------------------------------------
+
+backup_bucket_name = "your-project-id-n8n-backups"
+
+# --------------------------------------------------------
+# Observability & Alerting
+# --------------------------------------------------------
+
+oncall_email = "oncall@example.com"
+
+# Slack (optional)
+slack_auth_token = ""
+slack_channel    = "#n8n-ops"
+
+# Telegram (optional)
+telegram_bot_token = ""
+telegram_chat_id   = ""
+telegram_thread_id = ""
+
+# --------------------------------------------------------
+# Security / CI
+# --------------------------------------------------------
+
+wif_allowed_repository = "your-username/gcp-self-healing-infra"
+github_repository_url  = "https://github.com/your-username/gcp-self-healing-infra"
+
+# Optional WIF drift detection (leave empty to skip)
+wif_pool_id     = ""
+wif_provider_id = ""
+
+# --------------------------------------------------------
+# Cost & Disk
+# --------------------------------------------------------
+
+monthly_budget_usd = 5
+
+# Data disk for Postgres. Boot disk is fixed at 25 GB.
+# Total = 25 + disk_size_gb must be <= 30 for Free Tier.
+disk_size_gb = 5

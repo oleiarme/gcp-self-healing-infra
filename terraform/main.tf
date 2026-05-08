@@ -393,7 +393,7 @@ resource "google_compute_instance_template" "tpl" {
 
   disk {
     source_image         = "cos-cloud/cos-stable"
-    disk_size_gb         = 30
+    disk_size_gb         = 25
     auto_delete          = true
     boot                 = true
   }
@@ -454,7 +454,7 @@ config_cf_ar_image       = local.cf_ar_image
 
 config_db_port           = "5432"
 config_n8n_host          = var.n8n_public_host
-config_backup_bucket     = "n8n-backups-idealist426118"
+config_backup_bucket     = google_storage_bucket.backup.name
     startup-script-hash = local.startup_hash
     
   }
@@ -510,7 +510,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 2700
+    initial_delay_sec = 1200
   }
 
   update_policy {

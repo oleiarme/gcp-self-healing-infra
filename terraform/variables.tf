@@ -273,7 +273,7 @@ variable "telegram_thread_id" {
 variable "disk_size_gb" {
   description = "Size of the persistent data disk for Postgres"
   type        = number
-  default     = 10
+  default     = 5
 }
 
 variable "n8n_image_tag" {

@@ -85,7 +85,7 @@ INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig \
   --region=us-central1 --project=$PROJECT_ID --format="value(instance.basename())" | head -1)
 
 gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap \
-  --command="cd /opt/n8n && docker compose ps"
+  --command="docker ps --filter name=n8n --filter name=postgres --filter name=cloudflared"
 ```
 
 ### Post-Mortem Trigger
@@ -170,7 +170,7 @@ gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap \
 
 | Cause | Diagnosis | Fix |
 |---|---|---|
-| `no space left on device` during image extraction | `df -h` shows `/dev/root` > 85% full | Boot disk too small; increase to 20 GB in `main.tf` (see below) |
+| `no space left on device` during image extraction | `df -h` shows `/dev/root` > 85% full | Boot disk too small; increase to 25 GB in `main.tf` (see below) |
 | Docker Hub rate limit | Pull error: `429 Too Many Requests` | Next run will use Artifact Registry mirror (populated after first successful push) |
 | AR image not yet mirrored | `⚠️ AR miss` in logs, pulling from Docker Hub | Normal on first deploy; AR populated on next CI run |
 | n8n crashes on startup | `docker compose logs n8n` shows panic | Check DB connectivity, encryption key, schema migration |
@@ -182,14 +182,14 @@ If you see `no space left on device`:
 ```
 # In terraform/main.tf — disk block:
 disk {
-  source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
-  disk_size_gb = 20   # was 10 — increase to 20 GB
+  source_image = "cos-cloud/cos-stable"
+  disk_size_gb = 25   # Free Tier: 25 GB boot + 5 GB data = 30 GB total
   auto_delete  = true
   boot         = true
 }
 ```
 
-**Free Tier:** 20 GB boot + 10 GB data disk = **30 GB total** (within Free Tier limit).
+**Free Tier:** 25 GB boot + 5 GB data disk = **30 GB total** (within Free Tier limit).
 
 Push to GitHub → deploy.yml applies the change.
 
@@ -223,11 +223,11 @@ Use this to update n8n or cloudflared **without recreating the VM** (2-5 seconds
 3. Click **Run workflow** and monitor progress
 
 ### What Happens Under the Hood
-1. GitHub mirrors the new image to Artifact Registry (`us-central1-docker.pkg.dev/idealist-426118/n8n-docker/`)
+1. GitHub mirrors the new image to Artifact Registry (`us-central1-docker.pkg.dev/PROJECT_ID/n8n-docker/`)
 2. SSH into the running VM via IAP tunnel (no public port opened)
 3. Pull the new image (from AR if available, Docker Hub as fallback)
-4. `sed` updates the `.env` file with the new image ref
-5. `docker compose up -d --no-deps n8n` — replaces only the n8n container
+4. `sed` updates `/home/docker/runtime.env` with the new image ref
+5. `docker stop n8n && docker run ... n8n` — replaces only the n8n container
 6. Verifies health after 30 seconds
 
 ### After Testing: Persist the Version in Code
@@ -418,13 +418,13 @@ gcloud compute disks describe google-n8n-data \
 
 # Expected output:
 # "status": "READY"
-# "sizeGb": "10"
+# "sizeGb": "5"
 ```
 
 To check data is intact after VM restart:
 ```bash
 gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap \
-  --command="df -h /mnt/data && ls -la /mnt/data/postgres/"
+  --command="df -h /mnt/disks/data && ls -la /mnt/disks/data/postgres/"
 ```
 
 ### 7.4 Terraform State Rollback
@@ -572,9 +572,9 @@ export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig 
 | `gcloud compute ssh $INSTANCE --zone=$ZONE --tunnel-through-iap` | SSH into VM (no open ports) |
 | `gcloud compute ssh $INSTANCE --zone=$ZONE --tunnel-through-iap --command="..."` | Run single command on VM |
 | `tail -f /var/log/startup.log` | Full startup trace (run on VM) |
-| `cd /opt/n8n && docker compose ps` | Container status (run on VM) |
-| `cd /opt/n8n && docker compose logs n8n --tail=50` | n8n errors (run on VM) |
-| `df -h && ls -la /mnt/data/postgres/` | Check disk mounted and data present (run on VM) |
+| `docker ps` | Container status (run on VM) |
+| `docker logs n8n --tail=50` | n8n errors (run on VM) |
+| `df -h && ls -la /mnt/disks/data/postgres/` | Check disk mounted and data present (run on VM) |
 | `ls -l /dev/disk/by-id/` | Verify disk symlinks (run on VM) |
 | `gcloud compute instances get-serial-port-output $INSTANCE --zone=$ZONE` | Serial console (when SSH fails) |
 | `gcloud logging read 'resource.type="gce_instance" AND resource.labels.instance_name=~"n8n-.*"' --project=$PROJECT_ID --limit=50` | Startup logs from Cloud Logging |

@@ -64,7 +64,7 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 - **Stateful data**: Postgres data on a persistent disk (`pd-standard`) that **survives VM recreation**
 - **Fast app updates**: In-place deploy via SSH/IAP — update n8n in **5 seconds**, not 15 minutes
 - **Image caching**: Artifact Registry mirrors Docker Hub, bypassing rate limits and accelerating cold starts
-- **100% Free Tier**: e2-micro VM + 30 GB total storage (20 GB boot + 10 GB data) in `us-central1`
+- **100% Free Tier**: e2-micro VM + 30 GB total storage (25 GB boot + 5 GB data) in `us-central1`
 - **Keyless CI/CD**: Workload Identity Federation — no JSON service account keys stored anywhere
 - **Defense in depth**: `tflint` + `tfsec` + `Checkov` + `shellcheck` + `trivy` on every PR
 
@@ -81,16 +81,16 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 ## How Self-Healing Works
 
 1. **GCP Health Check** polls `http://VM:8080/` every **10s** (timeout 10s). 2 successes → healthy; 7 consecutive failures → unhealthy.
-2. **Bootstrap grace window**: `initial_delay_sec = 1800s` (30 min) prevents MIG from replacing a VM that is still booting. The health server returns 200 during this window regardless of container state.
+2. **Bootstrap grace window**: `initial_delay_sec = 1200s` (20 min) prevents MIG from replacing a VM that is still booting. The health server returns 200 during this window regardless of container state.
 3. **MIG auto-healing**: Once unhealthy status is confirmed, MIG recreates the VM. `replacement_method = RECREATE` ensures the stateful data disk is detached before the new VM claims it.
-4. **Startup sequence** (`startup.sh`):
+4. **Startup sequence** (`startup_cos.sh`, Container-Optimized OS):
    - Fetch secrets from Secret Manager
-   - Mount persistent disk (`/dev/disk/by-id/google-n8n-data` → `/mnt/data/postgres`)
+   - Mount persistent disk (`/dev/disk/by-id/google-n8n-data` → `/mnt/disks/data`)
    - Format disk on first boot only (idempotent thereafter)
    - Try Artifact Registry for images, fall back to Docker Hub
-   - Launch Postgres, n8n, cloudflared via Docker Compose
+   - Launch Postgres, n8n, cloudflared via `docker run` (no Docker Compose on COS)
    - Start health server on `:8080`
-5. **Recovery budget**: Cold start ≤ 30 min. Warm app-only update: **5 seconds**.
+5. **Recovery budget**: Cold start ≤ 20 min. Warm app-only update: **5 seconds**.
 
 ## Stack
 
@@ -139,7 +139,7 @@ The workflow will:
 | Resource | Limit | Our config |
 |---|---|---|
 | VM | 1× e2-micro in `us-west1`, `us-central1`, or `us-east1` | ✅ e2-micro in `us-central1` |
-| Disk | 30 GB standard persistent disk | ✅ 20 GB boot + 10 GB data = **30 GB** |
+| Disk | 30 GB standard persistent disk | ✅ 25 GB boot + 5 GB data = **30 GB** |
 | Network | 1 GB egress/month to same region | ✅ STANDARD tier, internal traffic |
 | Artifact Registry | 0.5 GB storage | ✅ ~400 MB (2 images) |
 
@@ -154,16 +154,17 @@ Performance Optimization Case Study
     - CPU 99% utilization during startup
     - MTTR: ~40 minutes (unacceptable for 99.5% SLO)
 
-    Solution: Cloud SQL in-region + optimization
-    1. Migrated to Cloud SQL PostgreSQL in the same us-central1 region
-    2. Removed Ops Agent (exceeded e2-micro IO budget)
-    3. Result: 3x faster recovery — MTTR dropped to ~18 minutes
+    Solution: COS + Local Postgres + optimization
+    1. Migrated to Container-Optimized OS (COS) — no package installs, faster boot
+    2. Migrated Postgres to local Docker container on persistent disk (same VM)
+    3. Removed Ops Agent (exceeded e2-micro IO budget on Debian)
+    4. Result: 3x faster recovery — MTTR dropped to ~17 minutes
 
     Roadmap: Golden Image
     Next optimization: create a golden disk with pre-loaded Docker images.
     - Target MTTR: 7-9 minutes (2x faster than current)
     - Trade-off: Slight increase in disk usage (still within Free Tier 30GB)
-    - Status: Pending (see initial_delay_sec discussion in Runbook §2)
+    - Status: Pending (see initial_delay_sec discussion in Runbook §3)
 
 ## Prerequisites
 
@@ -287,8 +288,8 @@ Digests are refreshed weekly by `.github/workflows/digest-refresh.yml` (Mondays 
 | Metric | Target | How measured |
 |---|---|---|
 | **Availability** | 99.5% over 28d rolling | External uptime check on `https://<n8n_public_host>/healthz`, 6 probe locations, 60s period |
-| **Recovery time (VM recreate)** | ≤ 30 min | `initial_delay_sec` (1800s) + HC detection + startup.sh |
-| **Recovery time (in-place)** | ≤ 5 seconds | `docker compose up -d --no-deps n8n` |
+| **Recovery time (VM recreate)** | ≤ 20 min | `initial_delay_sec` (1200s) + HC detection + `startup_cos.sh` |
+| **Recovery time (in-place)** | ≤ 5 seconds | `docker stop n8n && docker run ... n8n` |
 
 **Error budget:** 3.6h downtime/month (0.5%).
 
@@ -351,38 +352,45 @@ A Cloud Function (`n8n-telegram-alert`) is triggered by Pub/Sub on deploy events
  
 ```
 .
+├── .agents/
+│   ├── agents/                         # Infrastructure, security, deploy reviewers
+│   └── skills/                         # caveman, code-reviewing, security-auditor
 ├── .github/
 │   ├── actions/
-│   │   └── telegram-notify/        # Reusable Telegram notification action
+│   │   └── telegram-notify/            # Reusable Telegram notification action
 │   └── workflows/
-│       ├── deploy.yml              # Full infra deploy (Terraform apply)
-│       ├── app-deploy.yml          # In-place app update via SSH/IAP (5s)
-│       ├── terraform.yml           # PR validation (fmt/validate/lint/scan)
-│       ├── digest-refresh.yml      # Weekly image digest auto-update
-│       ├── schedule-vm-start.yml   # Morning VM start (cost optimization)
-│       └── schedule-vm-stop.yml    # Night VM stop (22:00 UTC daily)
+│       ├── deploy.yml                  # Full infra deploy (Terraform apply)
+│       ├── app-deploy.yml              # In-place app update via SSH/IAP (5s)
+│       ├── terraform.yml               # PR validation (fmt/validate/lint/scan)
+│       ├── digest-refresh.yml          # Weekly image digest auto-update
+│       ├── schedule-vm-start.yml       # Morning VM start (cost optimization)
+│       └── schedule-vm-stop.yml        # Night VM stop (22:00 UTC daily)
 ├── scripts/
-│   └── startup.sh                  # VM bootstrap (disk mount, Docker, n8n)
+│   ├── startup_cos.sh                  # VM bootstrap on COS (disk mount, Docker, n8n)
+│   └── startup.sh                      # Legacy Debian bootstrap (for reference)
 ├── terraform/
-│   ├── main.tf                     # Core: MIG, disk, AR, network, IAM
-│   ├── variables.tf                # All input variables
-│   ├── outputs.tf                  # Outputs for debugging and alerting
-│   ├── monitoring.tf               # Uptime checks, alerts, dashboards
-│   ├── dashboards.tf               # Cloud Monitoring dashboard
-│   ├── cloud_sql.tf                # Optional: Cloud SQL as code
-│   ├── telegram.tf                 # Telegram notification Cloud Function
-│   ├── bootstrap/                  # One-shot: create GCS state bucket
-│   ├── functions/                  # Cloud Function source (Telegram alert)
-│   ├── dashboards/                 # Dashboard JSON template
-│   └── backend.conf.example        # Backend config template
+│   ├── main.tf                         # Core: MIG, disk, AR, network, IAM
+│   ├── variables.tf                    # All input variables
+│   ├── outputs.tf                      # Outputs for debugging and alerting
+│   ├── monitoring.tf                   # Uptime checks, alerts, dashboards
+│   ├── dashboards.tf                   # Cloud Monitoring dashboard
+│   ├── cloud_sql.tf                    # Optional: Cloud SQL as code
+│   ├── telegram.tf                     # Telegram notification Cloud Function
+│   ├── bootstrap/                      # One-shot: create GCS state bucket
+│   ├── functions/                      # Cloud Function source (Telegram alert)
+│   ├── dashboards/                     # Dashboard JSON template
+│   ├── terraform.tfvars.example        # Template for local variables
+│   └── backend.conf.example            # Backend config template
 ├── docs/
 │   ├── slo-roadmap.md
 │   ├── error-budget-policy.md
 │   ├── oncall.md
+│   ├── security-architecture.md
 │   ├── drills/
 │   └── postmortems/
-├── Runbook.md                      # Incident playbook
-├── renovate.json                   # Renovate bot config
+├── CLAUDE.md                           # AI assistant constitution (caveman mode)
+├── Runbook.md                          # Incident playbook
+├── renovate.json                       # Renovate bot config
 └── README.md
 ```
 
