@@ -101,7 +101,7 @@ jobs:
           bash .github/scripts/wait-url.sh \
             --url "https://$N8N_HOST/healthz" \
             --code 200 \
-            --timeout 600
+            --timeout 1800
 
       - name: Send Telegram notification
         if: always() && vars.TELEGRAM_CHAT_ID != ''
