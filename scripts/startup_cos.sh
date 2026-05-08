@@ -634,6 +634,7 @@ docker run -d \
       -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
       -e N8N_RUNNERS_MODE=off \
       -e N8N_RUNNERS_ENABLED=false \
+      -e N8N_RUNNERS_TASK_BROKER_URI="http://localhost:1" \
       -e N8N_LOG_LEVEL=info \
       -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
       -e NODE_OPTIONS="--max-old-space-size=512" \
