@@ -339,6 +339,13 @@ resource "google_project_iam_member" "vm_sa_ar_reader" {
   member  = "serviceAccount:${google_service_account.vm_sa.email}"
 }
 
+# Import block: adopts the existing persistent disk into Terraform state.
+# Safe to leave permanently — Terraform skips it once the resource is tracked.
+import {
+  to = google_compute_disk.data
+  id = "projects/${var.project_id}/zones/${var.zone}/disks/google-n8n-data"
+}
+
 # checkov:skip=CKV_GCP_37: CSEK encryption is overkill for a Free Tier project; Google-managed encryption is sufficient
 resource "google_compute_disk" "data" {
   name = "google-n8n-data"
@@ -393,7 +400,7 @@ resource "google_compute_instance_template" "tpl" {
 
   disk {
     source_image         = "cos-cloud/cos-stable"
-    disk_size_gb         = 25
+    disk_size_gb         = 20
     auto_delete          = true
     boot                 = true
   }

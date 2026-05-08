@@ -98,6 +98,6 @@ wif_provider_id = ""
 
 monthly_budget_usd = 5
 
-# Data disk for Postgres. Boot disk is fixed at 25 GB.
-# Total = 25 + disk_size_gb must be <= 30 for Free Tier.
-disk_size_gb = 5
+# Data disk for Postgres. Boot disk is fixed at 20 GB.
+# Total = 20 + disk_size_gb must be <= 30 for Free Tier.
+disk_size_gb = 10
