@@ -25,6 +25,14 @@ on:
 concurrency:
   group: app-deploy
   cancel-in-progress: false
+
+env:
+  # Single source of truth for hardcoded defaults when GitHub Variables/Inputs are empty.
+  DEFAULT_N8N_IMAGE: "docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b"
+  DEFAULT_N8N_TAG: "2.19.5"
+  DEFAULT_CF_IMAGE: "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
+  DEFAULT_CF_TAG: "2026.3.0"
+
 jobs:
   deploy:
     name: In-Place Deploy
@@ -38,11 +46,11 @@ jobs:
       REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
       ZONE: ${{ vars.TF_VAR_zone || 'us-central1-a' }}
       AR_REPO: n8n-docker
-      # Resolve image refs: workflow input > GitHub var > hardcoded default
-      N8N_IMAGE: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:2.19.4@sha256:69bc5e62531664e6ac792e9eab91713725e75cbb7bd3b33702cddd7008648142' }}
-      CF_IMAGE: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || 'docker.io/cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
-      N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || '2.19.4' }}
-      CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
+      # Resolve image refs: workflow input > GitHub var > workflow default
+      N8N_IMAGE: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || env.DEFAULT_N8N_IMAGE }}
+      CF_IMAGE: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || env.DEFAULT_CF_IMAGE }}
+      N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || env.DEFAULT_N8N_TAG }}
+      CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || env.DEFAULT_CF_TAG }}
     steps:
       - uses: actions/checkout@v6
       - name: Auth to GCP

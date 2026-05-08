@@ -9,6 +9,14 @@ concurrency:
   cancel-in-progress: true
 
 
+env:
+  # Single source of truth for hardcoded defaults when GitHub Variables are empty.
+  # Update these only when bumping the baseline version for the entire repo.
+  DEFAULT_N8N_IMAGE: "docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b"
+  DEFAULT_N8N_TAG: "2.19.5"
+  DEFAULT_CF_IMAGE: "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
+  DEFAULT_CF_TAG: "2026.3.0"
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
@@ -24,6 +32,33 @@ jobs:
     permissions:
       contents: read
       id-token: write
+
+    env:
+      PROJECT: ${{ vars.TF_VAR_project_id }}
+      REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
+      AR_REPO: n8n-docker
+      # Resolve image refs: GitHub var > workflow default (mirrors variables.tf)
+      N8N_IMAGE: ${{ vars.TF_VAR_n8n_image || env.DEFAULT_N8N_IMAGE }}
+      CF_IMAGE: ${{ vars.TF_VAR_cloudflared_image || env.DEFAULT_CF_IMAGE }}
+      N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || env.DEFAULT_N8N_TAG }}
+      CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || env.DEFAULT_CF_TAG }}
+      # Terraform auto-picks these up via TF_VAR_ prefix
+      TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image || env.DEFAULT_N8N_IMAGE }}
+      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || env.DEFAULT_N8N_TAG }}
+      TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image || env.DEFAULT_CF_IMAGE }}
+      TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || env.DEFAULT_CF_TAG }}
+      TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
+      TF_VAR_region: ${{ vars.TF_VAR_region || 'us-central1' }}
+      TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
+      TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
+      TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
+      TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
+      TF_VAR_backup_bucket_name: ${{ vars.BACKUP_BUCKET_NAME }}
+      TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
+      TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
+      TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
+      TF_VAR_wif_allowed_repository: ${{ github.repository }}
+      TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
 
     steps:
       - uses: actions/checkout@v6
@@ -112,14 +147,8 @@ jobs:
             echo "Pull retry $i..."
             sleep 5
           done
-        env:
-          PROJECT: ${{ vars.TF_VAR_project_id }}
-          REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
-          AR_REPO: n8n-docker
-          N8N_IMAGE: ${{ vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:2.19.4@sha256:69bc5e62531664e6ac792e9eab91713725e75cbb7bd3b33702cddd7008648142' }}
-          CF_IMAGE: ${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
-          N8N_TAG: ${{ vars.TF_VAR_n8n_image_tag || '2.19.4' }}
-          CF_TAG: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
+          done
+          sleep 5 
 
       - name: Warn on mirror failure
         if: steps.mirror.outcome == 'failure'
@@ -132,35 +161,9 @@ jobs:
           TF_VAR_CF_TUNNEL_TOKEN: ${{ secrets.TF_VAR_CF_TUNNEL_TOKEN }}
           TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
           TF_VAR_n8n_encryption_key: ${{ secrets.TF_VAR_n8n_encryption_key }}
-          TF_VAR_backup_bucket_name: ${{ vars.BACKUP_BUCKET_NAME }}
-          TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
-          TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
-          TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
-          TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
-          TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
-          # Phase 4 resilience: google_billing_budget requires a billing
-          # account ID. Stored as a repository/env secret rather than a var
-          # because the ID is account-level metadata, not per-environment
-          # config — and some orgs treat it as confidential.
           TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
-          # Optional — if set, enables Slack notification channel in addition
-          # to email. If unset, only email fires. See monitoring.tf for the
-          # conditional wiring. The `||` fallback keeps Terraform's own
-          # `default = "#n8n-ops"` semantics intact: when the GitHub
-          # variable is undefined, `vars.TF_VAR_slack_channel` evaluates to
-          # an empty string (falsy in GH Actions expressions), and the
-          # literal default kicks in instead of being overwritten by "".
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
-          # WIF attribute-condition pinning + runbook URL rendering both
-          # reference this repo's GitHub identity. Derived from the
-          # workflow's own `github.repository` context so forks inherit
-          # the correct values automatically without per-fork config.
-          TF_VAR_wif_allowed_repository: ${{ github.repository }}
-          TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-          TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
 
       - name: Terraform Apply
         #run: terraform apply -replace=google_compute_instance_template.tpl -auto-approve
@@ -170,21 +173,6 @@ jobs:
           TF_VAR_CF_TUNNEL_TOKEN: ${{ secrets.TF_VAR_CF_TUNNEL_TOKEN }}
           TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
           TF_VAR_n8n_encryption_key: ${{ secrets.TF_VAR_n8n_encryption_key }}
-          TF_VAR_backup_bucket_name: ${{ vars.BACKUP_BUCKET_NAME }}
-          TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
-          TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
-          TF_VAR_db_user: ${{ vars.TF_VAR_db_user }}
-          TF_VAR_n8n_public_host: ${{ vars.TF_VAR_n8n_public_host }}
-          TF_VAR_oncall_email: ${{ vars.TF_VAR_oncall_email }}
           TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
-          # Same `||` fallback as the Plan step above: GitHub Actions
-          # vars.* are only accessible in ${{ ... }} expressions, not
-          # auto-exported as env vars, so we must list the var explicitly
-          # with a fallback that preserves Terraform's `default = "#n8n-ops"`.
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          TF_VAR_slack_channel: ${{ vars.TF_VAR_slack_channel || '#n8n-ops' }}
-          TF_VAR_wif_allowed_repository: ${{ github.repository }}
-          TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TF_VAR_telegram_chat_id: ${{ vars.TELEGRAM_CHAT_ID }}
-          TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
