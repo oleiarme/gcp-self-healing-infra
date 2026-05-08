@@ -97,7 +97,7 @@ jobs:
         continue-on-error: false
         working-directory: .
         run: |
-          set -eo pipefail
+          set -euo pipefail
           AR="${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}"
           # Check if AR repo exists (skip on first deploy)
           if ! gcloud artifacts repositories describe "$AR_REPO" \
@@ -147,8 +147,6 @@ jobs:
             echo "Pull retry $i..."
             sleep 5
           done
-          done
-          sleep 5 
 
       - name: Warn on mirror failure
         if: steps.mirror.outcome == 'failure'
@@ -166,8 +164,7 @@ jobs:
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
       - name: Terraform Apply
-        #run: terraform apply -replace=google_compute_instance_template.tpl -auto-approve
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve -input=false tfplan
         continue-on-error: false
         env:
           TF_VAR_CF_TUNNEL_TOKEN: ${{ secrets.TF_VAR_CF_TUNNEL_TOKEN }}
