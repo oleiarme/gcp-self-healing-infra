@@ -29,8 +29,8 @@ jobs:
       REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
       AR_REPO: n8n-docker
       # Resolve image refs: GitHub var > workflow default (mirrors variables.tf)
-      TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b' }}
-      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '2.19.5' }}
+      TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:1.123.42@sha256:9c6b47900464be0a00236ca2ee18f74e3a2be410d4fc4368f1b0eee602279cd5' }}
+      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '1.123.42' }}
       TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
       TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
       TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}

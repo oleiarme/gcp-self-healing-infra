@@ -189,7 +189,7 @@ variable "slack_channel" {
 variable "n8n_image" {
   description = "Pinned n8n container image (tag@digest). Managed by Renovate; release notes: https://github.com/n8n-io/n8n/releases"
   type        = string
-  default = "docker.io/n8nio/n8n:2.19.5@sha256:b1b0c592735e24acd3cc64db83f94ef4efd8e331e47c6883249cc51cc1bea16b"
+  default = "docker.io/n8nio/n8n:1.123.42@sha256:9c6b47900464be0a00236ca2ee18f74e3a2be410d4fc4368f1b0eee602279cd5"
 }
 
 variable "cloudflared_image" {
@@ -279,7 +279,7 @@ variable "disk_size_gb" {
 variable "n8n_image_tag" {
   description = "Tag for the n8n image"
   type        = string
-  default     = "2.19.5"
+  default     = "1.123.42"
 }
 
 variable "cloudflared_image_tag" {
