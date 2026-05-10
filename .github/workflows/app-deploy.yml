@@ -52,7 +52,7 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SA }}
       - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
       # Mirror images to AR (same logic as deploy.yml, reused for consistency)
       - name: Mirror images to Artifact Registry
         if: ${{ !inputs.skip_mirror }}
