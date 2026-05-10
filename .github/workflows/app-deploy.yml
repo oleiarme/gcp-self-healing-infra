@@ -166,6 +166,7 @@ jobs:
                 -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
                 -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
                 -e N8N_RUNNERS_ENABLED=false \
+                -e N8N_TRUST_PROXY=true \
                 -e N8N_LOG_LEVEL=warn \
                 -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
                 -e NODE_OPTIONS="--max-old-space-size=512" \
