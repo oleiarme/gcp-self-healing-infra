@@ -70,7 +70,7 @@ resource "google_service_account" "vm_sa" {
   # n8n on the next restart. Force a deliberate two-step destroy if we
   # ever genuinely need to remove it.
   lifecycle {
-    prevent_destroy = false
+    prevent_destroy = true
   }
 }
 
@@ -221,7 +221,6 @@ resource "google_secret_manager_secret_iam_member" "n8n_key_access" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.vm_sa.email}"
 }
-
 
 
 # 1.3 Cloudflare Tunnel Token
@@ -457,7 +456,6 @@ config_db_port           = "5432"
 config_n8n_host          = var.n8n_public_host
 config_backup_bucket     = google_storage_bucket.backup.name
     startup-script-hash = local.startup_hash
-    
   }
 
   lifecycle {
@@ -511,7 +509,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
 
   auto_healing_policies {
     health_check      = google_compute_health_check.hc.id
-    initial_delay_sec = 1200
+    initial_delay_sec = 2400
   }
 
   update_policy {
