@@ -376,6 +376,7 @@ resource "google_compute_instance_template" "tpl" {
   # Free-Tier envelope this repo is constrained to. Shielded VM + blocked
   # project-wide SSH keys cover the residual VM-level risk.
   # checkov:skip=CKV_GCP_40: public-IP is outbound-only; NAT violates Free-Tier budget
+  # checkov:skip=CKV_GCP_32: Block project-wide SSH keys is set inside the metadata merge block
   depends_on = [
     google_secret_manager_secret.db_password,
     google_secret_manager_secret.n8n_key,
