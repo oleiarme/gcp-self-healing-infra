@@ -629,6 +629,11 @@ resource "google_logging_metric" "sre_agent_llm_latency" {
     unit        = "s"
   }
   value_extractor = "EXTRACT(jsonPayload.latency_seconds)"
+  bucket_options {
+    explicit_buckets {
+      bounds = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 45.0, 60.0]
+    }
+  }
 }
 
 resource "google_logging_metric" "sre_agent_llm_tokens" {
@@ -644,6 +649,11 @@ resource "google_logging_metric" "sre_agent_llm_tokens" {
     unit        = "1"
   }
   value_extractor = "EXTRACT(jsonPayload.tokens_total)"
+  bucket_options {
+    explicit_buckets {
+      bounds = [100, 500, 1000, 2000, 5000, 10000, 20000, 50000]
+    }
+  }
 }
 
 resource "google_logging_metric" "sre_agent_llm_cost" {
@@ -659,6 +669,11 @@ resource "google_logging_metric" "sre_agent_llm_cost" {
     unit        = "1"
   }
   value_extractor = "EXTRACT(jsonPayload.cost_usd)"
+  bucket_options {
+    explicit_buckets {
+      bounds = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5]
+    }
+  }
 }
 
 resource "google_logging_metric" "sre_agent_diagnosis_failed" {
