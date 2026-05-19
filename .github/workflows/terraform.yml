@@ -1,6 +1,8 @@
 
 
 name: terraform-validate
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 permissions:
   contents: read
   pull-requests: write
@@ -20,7 +22,7 @@ jobs:
     outputs:
       terraform: ${{ steps.filter.outputs.terraform }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6 
 
       - name: Paths filter
         id: filter
@@ -39,7 +41,7 @@ jobs:
       run:
         working-directory: ./terraform
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6 
       - name: Skip if no terraform changes
         if: needs.changes.outputs.terraform != 'true'
         run: echo "No terraform changes, skipping Terraform steps"
@@ -74,7 +76,7 @@ jobs:
     name: Shellcheck scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6 
 
       - name: Run shellcheck
         # SC2154 suppressed: startup.sh is a Terraform templatefile and the
@@ -88,10 +90,11 @@ jobs:
     name: tflint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6 
       - uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: latest
+          github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: tflint --init
         run: tflint --init
         working-directory: ./terraform
@@ -106,7 +109,7 @@ jobs:
     name: tfsec
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6 
       - name: Run tfsec
         # tfsec scans Terraform for security misconfigurations (open ports,
         # plaintext secrets, missing encryption, public buckets, etc.). The
@@ -124,7 +127,7 @@ jobs:
     name: checkov
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6  
       - name: Run Checkov
         # Checkov is an additional policy scanner — overlap with tfsec is
         # intentional (defence in depth, different rule sets). Quiet mode
@@ -166,18 +169,24 @@ jobs:
     # owner for quarterly review), set exit-code back to "1". Severity
     # filter stays at HIGH,CRITICAL so the output volume remains usable.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6 
 
       - name: Extract pinned image refs from variables.tf
         id: images
         run: |
           set -euo pipefail
-          n8n=$(grep -oE 'docker\.n8n\.io/n8nio/n8n:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
-          cf=$(grep -oE 'cloudflare/cloudflared:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
+          n8n=$(grep -oE 'n8nio/n8n:[^"]+' terraform/variables.tf | tr -d '"' | head -n1 || true)
+          cf=$(grep -oE 'cloudflare/cloudflared:[^"]+' terraform/variables.tf | tr -d '"' | head -n1 || true)
+          if [ -z "$n8n" ]; then
+            echo "ERROR: n8n image not found"
+            exit 1
+          fi
+          if [ -z "$cf" ]; then
+            echo "ERROR: cloudflared image not found"
+            exit 1
+          fi
           echo "n8n=$n8n" >> "$GITHUB_OUTPUT"
           echo "cloudflared=$cf" >> "$GITHUB_OUTPUT"
-          echo "resolved: n8n=$n8n"
-          echo "resolved: cloudflared=$cf"
 
       # Pinned to v0.36.0 (2026-04-22 release). aquasecurity migrated to
       # v-prefixed tags after a prior supply-chain incident; using the
@@ -215,6 +224,8 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
 
       - name: Terraform Init (no backend)
         run: terraform init -backend=false

@@ -189,7 +189,7 @@ variable "slack_channel" {
 variable "n8n_image" {
   description = "Pinned n8n container image (tag@digest). Managed by Renovate; release notes: https://github.com/n8n-io/n8n/releases"
   type        = string
-  default = "docker.io/n8nio/n8n:1.123.42@sha256:9c6b47900464be0a00236ca2ee18f74e3a2be410d4fc4368f1b0eee602279cd5"
+  default     = "docker.io/n8nio/n8n:1.123.42@sha256:9c6b47900464be0a00236ca2ee18f74e3a2be410d4fc4368f1b0eee602279cd5"
 }
 
 variable "cloudflared_image" {
@@ -270,6 +270,28 @@ variable "telegram_thread_id" {
   type        = string
   default     = ""
 }
+# --------------------------------------------------------
+# SRE Agent (Phase 5 — auto-diagnostics)
+# --------------------------------------------------------
+
+variable "host_os" {
+  description = "Operating system profile for the VM. Controls log-based metric filters (Ubuntu uses labels.container_name + severity; COS uses jsonPayload.container.name + textPayload patterns)."
+  type        = string
+  default     = "ubuntu"
+
+  validation {
+    condition     = contains(["ubuntu", "cos"], var.host_os)
+    error_message = "host_os must be either 'ubuntu' or 'cos'."
+  }
+}
+
+variable "sre_agent_llm_api_key" {
+  description = "API key for the LLM provider used by the SRE agent (stored in Secret Manager as sre-agent-llm-key). Leave empty to disable LLM-based diagnosis (rule-based fallback will be used)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "disk_size_gb" {
   description = "Size of the persistent data disk for Postgres"
   type        = number
