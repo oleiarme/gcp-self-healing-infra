@@ -24,7 +24,10 @@ import httpx
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud import logging_v2, monitoring_v3
 
-from .models import Incident, LogLine, Metric, Signal
+try:
+    from .models import Incident, LogLine, Metric, Signal
+except ImportError:
+    from models import Incident, LogLine, Metric, Signal  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -396,7 +399,10 @@ def is_live_migration_in_window(incident: Incident) -> bool:
     Returns:
         True if live migration detected in window, False otherwise.
     """
-    from .settings import settings
+    try:
+        from .settings import settings
+    except ImportError:
+        from settings import settings  # type: ignore[no-redef]
 
     window_sec = settings.live_migration_window_sec
     vm_name = incident.resource.get("vm", "")
@@ -457,7 +463,10 @@ def instance_age_seconds_cached(incident: Incident) -> float | None:
     Returns:
         Age in seconds, or None if VM name not available or API error.
     """
-    from .settings import settings
+    try:
+        from .settings import settings
+    except ImportError:
+        from settings import settings  # type: ignore[no-redef]
 
     vm_name = incident.resource.get("vm", "")
     if not vm_name:
@@ -540,7 +549,10 @@ def truncate_context(
     Returns:
         List of Signal objects fitting within the token budget.
     """
-    from .settings import settings as _settings
+    try:
+        from .settings import settings as _settings
+    except ImportError:
+        from settings import settings as _settings  # type: ignore[no-redef]
 
     if max_tokens is None:
         max_tokens = _settings.max_context_tokens

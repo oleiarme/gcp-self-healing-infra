@@ -23,11 +23,21 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from .prompts import SYSTEM_PROMPT, format_user_prompt
-from .settings import settings
+try:
+    from .prompts import SYSTEM_PROMPT, format_user_prompt
+except ImportError:
+    from prompts import SYSTEM_PROMPT, format_user_prompt  # type: ignore[no-redef]
+
+try:
+    from .settings import settings
+except ImportError:
+    from settings import settings  # type: ignore[no-redef]
 
 if TYPE_CHECKING:
-    from .models import Diagnosis, Incident, Signal
+    try:
+        from .models import Diagnosis, Incident, Signal
+    except ImportError:
+        from models import Diagnosis, Incident, Signal  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +284,10 @@ def analyze_with_llm(
         json.JSONDecodeError: If LLM response is not valid JSON.
         pydantic.ValidationError: If parsed JSON doesn't match Diagnosis schema.
     """
-    from .models import Diagnosis  # local import to avoid circular
+    try:
+        from .models import Diagnosis  # local import to avoid circular
+    except ImportError:
+        from models import Diagnosis  # type: ignore[no-redef]
 
     provider = settings.llm_provider
     model = settings.llm_model

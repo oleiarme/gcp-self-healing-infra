@@ -23,6 +23,9 @@ tiktoken==0.9.0
 # --- CloudEvents (Pub/Sub trigger payload parsing) ---
 cloudevents==1.11.0
 
+# --- Functions Framework (required for Cloud Functions Gen2 runtime) ---
+functions-framework==3.8.2
+
 # --- Dev dependencies (not deployed to Cloud Function) ---
 # Install separately: pip install -r requirements-dev.txt
 # pytest>=8.3.0
