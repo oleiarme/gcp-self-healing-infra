@@ -4,4 +4,12 @@
 terraform.tfvars
 .history/
 .kilo/
+.kiro/
 .gitnexus/
+.agents/
+.venv/
+.pytest_cache/
+.lh/
+CLAUDE.md
+claude.md
+skills-lock.json
