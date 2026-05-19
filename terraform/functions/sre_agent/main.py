@@ -12,6 +12,20 @@ Requirements: 1.7, 4.1–4.4, 7.2, 7.3, 9.2–9.7, 10.1–10.3
 
 from __future__ import annotations
 
+# Bootstrap package context for GCP Cloud Functions runtime
+import os
+import sys
+if not __package__:
+    import types
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    if _current_dir not in sys.path:
+        sys.path.insert(0, _current_dir)
+    _pkg = types.ModuleType("sre_agent")
+    _pkg.__path__ = [_current_dir]  # type: ignore
+    sys.modules["sre_agent"] = _pkg
+    __package__ = "sre_agent"
+
+
 import base64
 import json
 import logging
