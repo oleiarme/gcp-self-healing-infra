@@ -172,7 +172,7 @@ jobs:
         id: images
         run: |
           set -euo pipefail
-          n8n=$(grep -oE 'docker\.n8n\.io/n8nio/n8n:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
+          n8n=$(grep -oE 'docker\.io/n8nio/n8n:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
           cf=$(grep -oE 'cloudflare/cloudflared:[^"]+"' terraform/variables.tf | tr -d '"' | head -n1)
           echo "n8n=$n8n" >> "$GITHUB_OUTPUT"
           echo "cloudflared=$cf" >> "$GITHUB_OUTPUT"
