@@ -143,6 +143,8 @@ cat <<EOF > "$COMPOSE_DIR/.env"
 CF_TOKEN=$CF_TOKEN
 N8N_KEY=$N8N_KEY
 DB_PASSWORD=$DB_PASSWORD
+DB_NAME=${db_name}
+DB_USER=${db_user}
 N8N_IMAGE=$N8N_TARGET
 CLOUDFLARED_IMAGE=$CF_TARGET
 DATA_DIR=$DATA_DIR
@@ -170,11 +172,11 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_DB: n8n
-      POSTGRES_USER: n8n
+      POSTGRES_DB: $${DB_NAME}
+      POSTGRES_USER: $${DB_USER}
       POSTGRES_PASSWORD: $${DB_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      test: ["CMD-SHELL", "pg_isready -U $${DB_USER} -d $${DB_NAME}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -197,8 +199,8 @@ services:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_PORT: 5432
-      DB_POSTGRESDB_DATABASE: n8n
-      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_DATABASE: $${DB_NAME}
+      DB_POSTGRESDB_USER: $${DB_USER}
       DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
       N8N_ENCRYPTION_KEY: $${N8N_KEY}
       N8N_EXECUTIONS_MODE: regular
@@ -261,8 +263,8 @@ services:
       N8N_URL: "http://n8n:5678/rest/active-workflows"
       POSTGRES_HOST: "postgres"
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: "n8n"
-      POSTGRES_DB: "n8n"
+      POSTGRES_USER: $${DB_USER}
+      POSTGRES_DB: $${DB_NAME}
       POSTGRES_PASSWORD: $${DB_PASSWORD}
       CLOUDFLARED_METRICS_URL: "http://cloudflared:2000/ready"
       BOOTSTRAP_WINDOW_SECONDS: "1800"
@@ -325,8 +327,8 @@ docker compose up -d postgres || {
 echo "=== Waiting for Postgres ==="
 READY=false
 for i in {1..60}; do
-  if docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
-    if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+  if docker compose exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
+    if docker compose exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
       READY=true
       break
