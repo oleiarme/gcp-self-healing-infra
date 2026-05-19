@@ -49,8 +49,43 @@ if ! curl -sf -H "Metadata-Flavor: Google" \
   exit 1
 fi
 
+# Fetch Access Token and Project ID from metadata server for API access (COS does not have gcloud CLI)
+TOKEN_RESPONSE=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" || echo "")
+CLEAN_RESPONSE=$(echo "$TOKEN_RESPONSE" | tr -d '\n\r ')
+ACCESS_TOKEN=$(echo "$CLEAN_RESPONSE" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+if [ -z "$ACCESS_TOKEN" ]; then
+  echo "❌ Failed to fetch access token from metadata server"
+  exit 1
+fi
+
+PROJECT_ID=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/project-id" || echo "")
+if [ -z "$PROJECT_ID" ]; then
+  echo "❌ Failed to fetch project ID from metadata server"
+  exit 1
+fi
+
+fetch_secret() {
+  # shellcheck disable=SC2034
+  local secret_name="$1"
+  local url="https://secretmanager.googleapis.com/v1/projects/$${PROJECT_ID}/secrets/$${secret_name}/versions/latest:access"
+  local res
+  res=$(curl -sf -H "Authorization: Bearer $${ACCESS_TOKEN}" "$url" || echo "")
+  if [ -z "$res" ]; then
+    return 1
+  fi
+  local clean
+  clean=$(echo "$res" | tr -d '\n\r ')
+  local b64
+  b64=$(echo "$clean" | sed -n 's/.*"data":"\([^"]*\)".*/\1/p')
+  if [ -z "$b64" ]; then
+    return 1
+  fi
+  echo "$b64" | base64 --decode
+}
+
 echo "=== Checking Secret Manager access ==="
-if ! retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
+if ! retry fetch_secret "${DB_SECRET_NAME}" >/dev/null; then
   echo "❌ Cannot access Secret Manager"
   exit 1
 fi
@@ -59,17 +94,17 @@ fi
 # 3. Fetch secrets from Secret Manager
 # ==========================================
 echo "=== Get Secrets from Secret Manager ==="
-DB_PASSWORD=$(retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
+DB_PASSWORD=$(retry fetch_secret "${DB_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
   exit 1
 }
 
-N8N_KEY=$(retry gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
+N8N_KEY=$(retry fetch_secret "${N8N_KEY_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch N8N_KEY"
   exit 1
 }
 
-CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
+CF_TOKEN=$(retry fetch_secret "${CF_TUNNEL_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch CF_TOKEN"
   exit 1
 }
@@ -117,7 +152,9 @@ chown -R 70:70 "$DATA_DIR/postgres"
 # ==========================================
 echo "=== Resolve AR Images ==="
 N8N_TARGET="${n8n_ar_image}"
-retry gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
+echo "$ACCESS_TOKEN" | docker login -u oauth2token --password-stdin "https://${ar_location}-docker.pkg.dev" >/dev/null 2>&1 || {
+  echo "⚠️ Failed to authenticate docker with Artifact Registry"
+}
 
 if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
   echo "⚠️ AR miss for n8n → fallback to public"

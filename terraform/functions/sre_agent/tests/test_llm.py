@@ -145,6 +145,39 @@ class TestUnknownProvider:
             analyze_with_llm(_make_incident(), _make_signals())
 
 
+# --- Tests: Placeholder/empty API key ---
+
+
+class TestPlaceholderAPIKey:
+    """ValueError for empty or placeholder API key."""
+
+    @patch("sre_agent.llm.settings")
+    def test_placeholder_api_key_raises_value_error(self, mock_settings):
+        """API key is 'placeholder' → ValueError."""
+        from sre_agent.llm import analyze_with_llm
+
+        mock_settings.llm_provider = "gemini"
+        mock_settings.llm_model = "gemini-1.5-flash-002"
+        mock_settings.llm_timeout_seconds = 45
+        mock_settings.llm_api_key = "placeholder"
+
+        with pytest.raises(ValueError, match="LLM API key is empty or placeholder"):
+            analyze_with_llm(_make_incident(), _make_signals())
+
+    @patch("sre_agent.llm.settings")
+    def test_empty_api_key_raises_value_error(self, mock_settings):
+        """API key is empty → ValueError."""
+        from sre_agent.llm import analyze_with_llm
+
+        mock_settings.llm_provider = "gemini"
+        mock_settings.llm_model = "gemini-1.5-flash-002"
+        mock_settings.llm_timeout_seconds = 45
+        mock_settings.llm_api_key = ""
+
+        with pytest.raises(ValueError, match="LLM API key is empty or placeholder"):
+            analyze_with_llm(_make_incident(), _make_signals())
+
+
 # --- Tests: Client-side validation ---
 
 

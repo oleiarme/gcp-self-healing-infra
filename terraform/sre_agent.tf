@@ -120,9 +120,30 @@ resource "google_project_iam_member" "sre_agent_compute_viewer" {
   member  = "serviceAccount:${google_service_account.sre_agent.email}"
 }
 
+# GCS bucket for Cloudflare logpush storage (Phase 4)
+resource "google_storage_bucket" "cloudflare_logs" {
+  name                        = "${var.project_id}-cloudflare-logs"
+  location                    = upper(var.region)
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  versioning {
+    enabled = true
+  }
+
+  lifecycle_rule {
+    condition {
+      age = 30
+    }
+    action {
+      type = "Delete"
+    }
+  }
+}
+
 # roles/storage.objectViewer — read Cloudflare logs bucket (Phase 4)
 resource "google_storage_bucket_iam_member" "sre_agent_cloudflare_logs_reader" {
-  bucket = "${var.project_id}-cloudflare-logs"
+  bucket = google_storage_bucket.cloudflare_logs.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.sre_agent.email}"
 }
@@ -140,7 +161,7 @@ resource "google_secret_manager_secret" "sre_llm_key" {
 
 resource "google_secret_manager_secret_version" "sre_llm_key_v" {
   secret      = google_secret_manager_secret.sre_llm_key.id
-  secret_data = var.sre_agent_llm_api_key
+  secret_data = var.sre_agent_llm_api_key != "" ? var.sre_agent_llm_api_key : "placeholder"
 }
 
 resource "google_secret_manager_secret_iam_member" "sre_agent_llm_key_access" {
@@ -604,7 +625,7 @@ resource "google_logging_metric" "sre_agent_llm_latency" {
   EOT
   metric_descriptor {
     metric_kind = "DELTA"
-    value_type  = "DOUBLE"
+    value_type  = "DISTRIBUTION"
     unit        = "s"
   }
   value_extractor = "EXTRACT(jsonPayload.latency_seconds)"
@@ -619,7 +640,7 @@ resource "google_logging_metric" "sre_agent_llm_tokens" {
   EOT
   metric_descriptor {
     metric_kind = "DELTA"
-    value_type  = "INT64"
+    value_type  = "DISTRIBUTION"
     unit        = "1"
   }
   value_extractor = "EXTRACT(jsonPayload.tokens_total)"
@@ -634,7 +655,7 @@ resource "google_logging_metric" "sre_agent_llm_cost" {
   EOT
   metric_descriptor {
     metric_kind = "DELTA"
-    value_type  = "DOUBLE"
+    value_type  = "DISTRIBUTION"
     unit        = "1"
   }
   value_extractor = "EXTRACT(jsonPayload.cost_usd)"
