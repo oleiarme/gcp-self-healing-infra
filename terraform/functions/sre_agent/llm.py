@@ -281,6 +281,10 @@ def analyze_with_llm(
     timeout = settings.llm_timeout_seconds
     api_key = settings.llm_api_key
 
+    # Validate API key
+    if not api_key or api_key == "placeholder":
+        raise ValueError("LLM API key is empty or placeholder")
+
     # Validate provider
     if provider not in _KNOWN_PROVIDERS:
         raise ValueError(f"unknown provider {provider}")
