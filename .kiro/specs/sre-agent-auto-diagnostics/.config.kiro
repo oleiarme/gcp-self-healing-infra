@@ -1,7 +1,0 @@
-{
-  "specType": "feature",
-  "workflowType": "design-first",
-  "designArtifacts": ["high-level-design", "low-level-design"],
-  "featureName": "sre-agent-auto-diagnostics",
-  "language": "ru"
-}
