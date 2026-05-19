@@ -245,7 +245,7 @@ resource "google_cloudfunctions2_function" "sre_agent" {
       PROCESSING_TIMEOUT_SECONDS = "240"
 
       # OS profile
-      HOST_OS = var.host_os
+      HOST_OS = "cos"
 
       # Time-window contract (must match MIG initial_delay_sec)
       BOOTSTRAP_GRACE_SECONDS           = "1800"
@@ -294,36 +294,16 @@ resource "google_cloudfunctions2_function" "sre_agent" {
 }
 
 # ==========================================
-# 11.4 Log-based Metrics (Ubuntu + COS variants)
+# 11.4 Log-based Metrics (COS)
 # Requirements: 8.1, 8.2, 8.3
 # ==========================================
 #
-# Strategy: Both ubuntu and cos variants share the same logical metric
-# name (e.g. "n8n/postgres_fatal"). Only one is active at a time via
-# count = var.host_os == "<os>" ? 1 : 0. Alert policies reference the
-# logical name and remain OS-invariant.
+# Strategy: Standardized on COS metrics. Alert policies reference the
+# logical names and remain OS-invariant.
 
 # --- postgres_fatal ---
 
-resource "google_logging_metric" "postgres_fatal_ubuntu" {
-  count   = var.host_os == "ubuntu" ? 1 : 0
-  name    = "n8n/postgres_fatal"
-  project = var.project_id
-  filter  = <<-EOT
-    resource.type="gce_instance"
-    AND labels."container_name"="postgres"
-    AND (severity>=ERROR
-         OR textPayload=~"(FATAL|PANIC|deadlock detected|out of memory)")
-  EOT
-  metric_descriptor {
-    metric_kind = "DELTA"
-    value_type  = "INT64"
-    unit        = "1"
-  }
-}
-
-resource "google_logging_metric" "postgres_fatal_cos" {
-  count   = var.host_os == "cos" ? 1 : 0
+resource "google_logging_metric" "postgres_fatal" {
   name    = "n8n/postgres_fatal"
   project = var.project_id
   filter  = <<-EOT
@@ -343,25 +323,7 @@ resource "google_logging_metric" "postgres_fatal_cos" {
 
 # --- n8n_error ---
 
-resource "google_logging_metric" "n8n_error_ubuntu" {
-  count   = var.host_os == "ubuntu" ? 1 : 0
-  name    = "n8n/n8n_error"
-  project = var.project_id
-  filter  = <<-EOT
-    resource.type="gce_instance"
-    AND labels."container_name"="n8n"
-    AND (severity>=ERROR
-         OR textPayload=~"(ECONNREFUSED|workflow execution failed|ETIMEDOUT|FATAL)")
-  EOT
-  metric_descriptor {
-    metric_kind = "DELTA"
-    value_type  = "INT64"
-    unit        = "1"
-  }
-}
-
-resource "google_logging_metric" "n8n_error_cos" {
-  count   = var.host_os == "cos" ? 1 : 0
+resource "google_logging_metric" "n8n_error" {
   name    = "n8n/n8n_error"
   project = var.project_id
   filter  = <<-EOT
@@ -381,23 +343,7 @@ resource "google_logging_metric" "n8n_error_cos" {
 
 # --- oom_killed ---
 
-resource "google_logging_metric" "oom_killed_ubuntu" {
-  count   = var.host_os == "ubuntu" ? 1 : 0
-  name    = "n8n/oom_killed"
-  project = var.project_id
-  filter  = <<-EOT
-    resource.type="gce_instance"
-    AND (textPayload=~"Out of memory: Killed process"
-         OR jsonPayload.MESSAGE=~"Out of memory: Killed process")
-  EOT
-  metric_descriptor {
-    metric_kind = "DELTA"
-    value_type  = "INT64"
-  }
-}
-
-resource "google_logging_metric" "oom_killed_cos" {
-  count   = var.host_os == "cos" ? 1 : 0
+resource "google_logging_metric" "oom_killed" {
   name    = "n8n/oom_killed"
   project = var.project_id
   filter  = <<-EOT

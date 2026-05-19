@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     redact_ipv4: bool = False
 
     # ─── OS profile ──────────────────────────────────────────────────
-    host_os: Literal["ubuntu", "cos"] = "ubuntu"
+    host_os: Literal["ubuntu", "cos"] = "cos"
 
     # ─── Time-window contract (Req 9.1, 9.2) ─────────────────────────
     # Single source of truth — env-overridable, synced with Terraform.
