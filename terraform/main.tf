@@ -4,8 +4,7 @@ terraform {
   # Backend настраивается через -backend-config=backend.conf
   # Placeholder bucket — перезаписывается -backend-config="bucket=..." в CI
   backend "gcs" {
-    bucket  = "idealist-426118-tf-state"
-    prefix  = "n8n"
+    bucket = "tf-state-placeholder"
   }
 
   required_providers {
@@ -34,7 +33,6 @@ provider "google" {
 resource "random_id" "bucket_suffix" {
   byte_length = 2
 }
-
 resource "google_project_service" "required" {
   for_each = toset([
     "cloudresourcemanager.googleapis.com",
@@ -125,7 +123,6 @@ resource "google_project_iam_member" "vm_sa_metric_writer" {
 # and the output-only documentation is the sole safeguard (unchanged
 # behaviour for repos that haven't opted in).
 locals {
-  startup_hash = filemd5("${path.module}/../scripts/startup_cos.sh")
   wif_enforcement_enabled = var.wif_pool_id != "" && var.wif_provider_id != ""
   wif_expected_condition  = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
 
@@ -221,7 +218,6 @@ resource "google_secret_manager_secret_iam_member" "n8n_key_access" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.vm_sa.email}"
 }
-
 
 # 1.3 Cloudflare Tunnel Token
 resource "google_secret_manager_secret" "cf_token" {
@@ -346,8 +342,7 @@ resource "google_compute_disk" "data" {
   size = var.disk_size_gb
 
   lifecycle {
-    # prevent_destroy = false
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
@@ -386,16 +381,16 @@ resource "google_compute_instance_template" "tpl" {
     google_secret_manager_secret.n8n_key,
     google_secret_manager_secret.cf_token
   ]
-  name_prefix  = "n8n-"
+  name         = "n8n-${substr(md5(timestamp()), 0, 6)}"
   machine_type = "e2-micro"
   tags         = ["n8n"]
 
 
   disk {
-    source_image         = "cos-cloud/cos-stable"
-    disk_size_gb         = 20
-    auto_delete          = true
-    boot                 = true
+    source_image = var.host_os == "cos" ? "cos-cloud/cos-stable" : "ubuntu-os-cloud/ubuntu-2204-lts"
+    disk_size_gb = 20
+    auto_delete  = true
+    boot         = true
   }
 
   disk {
@@ -434,29 +429,54 @@ resource "google_compute_instance_template" "tpl" {
     scopes = ["cloud-platform"]
   }
 
-  metadata = {
-    # Block OS-login / project-wide SSH keys. Runbook procedures do not
-    # rely on interactive SSH — everything is either a `terraform apply`
-    # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
-    block-project-ssh-keys = "true"
-    startup-script = file("${path.module}/../scripts/startup_cos.sh")
-    config_db_user           = var.db_user
-config_db_name           = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : var.db_name
-config_db_secret         = google_secret_manager_secret.db_password.secret_id
-config_n8n_key_secret    = google_secret_manager_secret.n8n_key.secret_id
-config_cf_token_secret   = google_secret_manager_secret.cf_token.secret_id
-
-config_n8n_image         = var.n8n_image
-config_cloudflared_image = var.cloudflared_image
-
-config_n8n_ar_image      = local.n8n_ar_image
-config_cf_ar_image       = local.cf_ar_image
-
-config_db_port           = "5432"
-config_n8n_host          = var.n8n_public_host
-config_backup_bucket     = google_storage_bucket.backup.name
-    startup-script-hash = local.startup_hash
-  }
+  metadata = merge(
+    {
+      # Block OS-login / project-wide SSH keys. Runbook procedures do not
+      # rely on interactive SSH — everything is either a `terraform apply`
+      # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
+      block-project-ssh-keys = "true"
+      force_update           = timestamp()
+    },
+    # Ubuntu metadata: startup-script with apt-get, systemd, etc.
+    var.host_os == "ubuntu" ? {
+      startup-script = templatefile("${path.module}/../scripts/startup.sh", {
+        db_host               = local.effective_db_host
+        db_user               = var.db_user
+        DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
+        N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
+        CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
+        db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
+        db_port               = "5432"
+        n8n_image             = var.n8n_image
+        cloudflared_image     = var.cloudflared_image
+        n8n_ar_image          = local.n8n_ar_image
+        cloudflared_ar_image  = local.cf_ar_image
+        ar_location           = var.region
+        BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      })
+    } : {},
+    # COS metadata: google-logging-enabled, google-monitoring-enabled, user-data
+    # Requirements: 8.4, 8.10
+    var.host_os == "cos" ? {
+      google-logging-enabled    = "true"
+      google-monitoring-enabled = "true"
+      user-data = templatefile("${path.module}/../scripts/startup_cos.sh", {
+        db_host               = local.effective_db_host
+        db_user               = var.db_user
+        DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
+        N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
+        CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
+        db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
+        db_port               = "5432"
+        n8n_image             = var.n8n_image
+        cloudflared_image     = var.cloudflared_image
+        n8n_ar_image          = local.n8n_ar_image
+        cloudflared_ar_image  = local.cf_ar_image
+        ar_location           = var.region
+        BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      })
+    } : {}
+  )
 
   lifecycle {
     create_before_destroy = true

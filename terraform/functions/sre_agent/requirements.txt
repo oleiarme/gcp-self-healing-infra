@@ -1,0 +1,31 @@
+# SRE-agent auto-diagnostics — Cloud Function Gen2 (Python 3.12)
+# Pinned versions for reproducible builds.
+
+# --- GCP Client Libraries ---
+google-cloud-logging==3.11.3
+google-cloud-monitoring==2.27.0
+google-cloud-firestore==2.27.0
+google-cloud-compute==1.22.0
+google-cloud-secret-manager==2.23.3
+
+# --- Data Validation & Settings ---
+pydantic==2.12.5
+pydantic-settings==2.10.1
+
+# --- HTTP & DNS (external probe) ---
+httpx==0.28.1
+dnspython==2.7.0
+
+# --- Token counting (LLM cost estimation) ---
+# Design allows heuristic fallback (len(text)//4), but tiktoken gives accurate counts
+tiktoken==0.9.0
+
+# --- CloudEvents (Pub/Sub trigger payload parsing) ---
+cloudevents==1.11.0
+
+# --- Dev dependencies (not deployed to Cloud Function) ---
+# Install separately: pip install -r requirements-dev.txt
+# pytest>=8.3.0
+# pytest-asyncio>=0.24.0
+# hypothesis>=6.115.0
+# respx>=0.22.0

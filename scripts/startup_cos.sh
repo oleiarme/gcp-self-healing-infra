@@ -1,882 +1,389 @@
 #!/bin/bash
-
-trap 'echo "Graceful shutdown...";
-
-docker stop --time=30 n8n 2>/dev/null || true;
-docker stop --time=20 cloudflared 2>/dev/null || true;
-docker stop --time=30 postgres 2>/dev/null || true;
-
-exit 0' SIGTERM SIGINT
-
+# startup_cos.sh — COS (Container-Optimized OS) startup script
+# Equivalent of scripts/startup.sh for Ubuntu, but tailored for COS:
+#   - No apt-get install (Docker and gcloud are built-in)
+#   - No systemd services (Docker already running)
+#   - Uses docker-compose with labels and json-file logging
+#   - Metadata google-logging-enabled=true, google-monitoring-enabled=true (set in Terraform)
+#
+# Requirements: 8.4, 8.5
 set -e
 set -o pipefail
-set -u
+exec > >(tee /var/log/startup.log) 2>&1
 
-exec > >(tee /var/log/startup.log|logger -t startup) 2>&1
-
-echo "Starting n8n on COS..."
-
-# ==========================================
-# CONFIG FROM GCP METADATA
-# ==========================================
-get_custom_meta() {
-  curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1"
-}
-
-get_required_meta() {
-  local key="$1"
-  local val
-  val=$(get_custom_meta "$key")
-
-  if [ -z "$val" ]; then
-    echo "❌ Missing metadata: $key"
-    exit 1
-  fi
-
-  echo "$val"
-}
-
-echo "=== Loading Configuration ==="
-
-db_user=$(get_required_meta "config_db_user")
-db_name=$(get_required_meta "config_db_name")
-DB_SECRET_NAME=$(get_required_meta "config_db_secret")
-N8N_KEY_SECRET_NAME=$(get_required_meta "config_n8n_key_secret")
-CF_TUNNEL_SECRET_NAME=$(get_required_meta "config_cf_token_secret")
-
-n8n_image=$(get_required_meta "config_n8n_image")
-cloudflared_image=$(get_required_meta "config_cloudflared_image")
-
-n8n_ar_image=$(get_required_meta "config_n8n_ar_image")
-cloudflared_ar_image=$(get_required_meta "config_cf_ar_image")
-
-db_port=$(get_required_meta "config_db_port")
-n8n_public_host=$(get_required_meta "config_n8n_host")
-BACKUP_BUCKET_NAME=$(get_required_meta "config_backup_bucket")
-
-echo "CONFIG LOADED: db=$db_name user=$db_user host=$n8n_public_host"
-
-# ==========================================
-# 0. Utility functions
-# ==========================================
-
-restore_db() {
-  echo "→ Fetching latest backup..."
-
-  TOKEN=$(get_token)
-
-  BACKUP_INFO=$(curl -fs \
-    -H "Authorization: Bearer $TOKEN" \
-    "https://storage.googleapis.com/storage/v1/b/${BACKUP_BUCKET_NAME}/o?prefix=n8n/n8n-" \
-    || true)
-
-  LATEST_OBJ=$(echo "$BACKUP_INFO" \
-    | grep -o '"name": "[^"]*' \
-    | cut -d'"' -f4 \
-    | grep -E '\.sql(\.gz)?$' \
-    | sort \
-    | tail -n 1)
-
-  if [ -z "$LATEST_OBJ" ]; then
-    echo "❌ No backup found → cannot restore"
-    exit 0
-  fi
-
-  echo "→ Latest backup: $LATEST_OBJ"
-
-  RESTORE_FILE="/mnt/disks/data/tmp/restore.sql"
-  mkdir -p /mnt/disks/data/tmp
-
-  ENCODED_OBJ=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${LATEST_OBJ}', safe=''))")
-  rm -f "$RESTORE_FILE"
-
-  curl -sf \
-    -H "Authorization: Bearer $TOKEN" \
-    "https://storage.googleapis.com/download/storage/v1/b/${BACKUP_BUCKET_NAME}/o/${ENCODED_OBJ}?alt=media" \
-    -o "$RESTORE_FILE"
-
-  if [ ! -s "$RESTORE_FILE" ]; then
-    echo "❌ Backup empty"
-    exit 1
-  fi
-
-  echo "→ Resetting DB schema before restore"
-
-  docker exec postgres psql -U "${db_user}" -d "${db_name}" \
-    -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-
-  echo "→ Restoring..."
-
-  if file "$RESTORE_FILE" | grep -q gzip; then
-    gunzip -c "$RESTORE_FILE" | timeout 600 docker exec -i postgres psql \
-      -U "${db_user}" -d "${db_name}"
-  else
-    timeout 600 docker exec -i postgres psql \
-      -U "${db_user}" -d "${db_name}" < "$RESTORE_FILE"
-  fi
-
-  echo "✅ Restore complete"
-}
-
-check_db_health() {
-  echo "=== DB HEALTH CHECK (optimized) ==="
-
-  RESULT=$(docker exec postgres psql -U "${db_user}" -d "${db_name}" -tA -F',' -c "
-SELECT
-  EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='migrations'),
-  COALESCE((SELECT COUNT(*) FROM migrations), 0),
-  EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='workflow_entity'),
-  COALESCE((SELECT COUNT(*) FROM workflow_entity), 0),
-  EXISTS (SELECT 1 FROM pg_indexes WHERE tablename='workflow_entity' AND indexname LIKE '%pkey%');
-" 2>/dev/null || echo "")
-
-  if [ -z "$RESULT" ]; then
-    echo "❌ DB connection failed"
-    return 1
-  fi
-
-  IFS=',' read -r MIG_EXISTS MIG_COUNT WF_EXISTS WF_COUNT PK_EXISTS <<< "$RESULT"
-
-  echo "DEBUG: migrations=$MIG_EXISTS count=$MIG_COUNT workflow=$WF_EXISTS count=$WF_COUNT pk=$PK_EXISTS"
-
-  if [ "$MIG_EXISTS" != "t" ] || [ "$MIG_COUNT" -lt 1 ]; then
-    echo "❌ migrations invalid"
-    return 1
-  fi
-
-  if [ "$WF_EXISTS" != "t" ] || [ "$WF_COUNT" -lt 1 ]; then
-    echo "❌ workflow invalid"
-    return 1
-  fi
-
-  if [ "$PK_EXISTS" != "t" ]; then
-    echo "❌ PK missing"
-    return 1
-  fi
-
-  echo "✅ DB HEALTHY"
-  return 0
-}
+echo "=== COS Startup Script ==="
+echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 retry() {
   for i in {1..5}; do
     "$@" && return 0
-    echo "⏳ Retry $i/5: $*"
     sleep 5
   done
   return 1
 }
 
-get_metadata() {
-  curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"
-}
-
-get_token() {
-  get_metadata "instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4
-}
-
-get_secret() {
-  local SECRET_NAME=$1
-  local PROJECT_ID=$(get_metadata "project/project-id")
-
-  if [ -z "$PROJECT_ID" ]; then
-    echo "❌ project_id is empty"
-    return 1
-  fi
-
-  local TOKEN=$(get_token)
-  local RAW
-  RAW=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
-     "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/${SECRET_NAME}/versions/latest:access")
-  DATA=$(echo "$RAW" | python3 -c "import sys, json; print(json.load(sys.stdin)['payload']['data'])")
-
-  if [ -z "$DATA" ]; then
-    echo "❌ Secret $SECRET_NAME is empty or invalid"
-    return 1
-  fi
-
-  echo "$DATA" | base64 -d
-}
-
-mkdir -p /mnt/stateful_partition/docker
-
-cat <<EOF > /etc/docker/daemon.json
-{
-  "data-root": "/mnt/stateful_partition/docker",
-  "mtu": 1460,
-  "max-concurrent-downloads": 3,
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF
-
-DOCKER_READY_FILE="/var/run/docker-initialized"
-
-if [ ! -f "$DOCKER_READY_FILE" ]; then
-  echo "=== Initial Docker bootstrap ==="
-
-  # restart ONLY if docker unhealthy
-  if ! docker info >/dev/null 2>&1; then
-    echo "Docker daemon unhealthy → restarting"
-    systemctl restart docker
-  else
-    echo "Docker daemon already healthy"
-  fi
-
-  echo "=== Waiting for Docker daemon ==="
-
-  for i in {1..30}; do
-    if docker info >/dev/null 2>&1; then
-      echo "✅ Docker daemon ready"
-      break
-    fi
-
-    echo "⏳ Waiting Docker daemon ($i/30)..."
-    sleep 2
-  done
-
-  echo "=== Waiting for Docker networking ==="
-
-  for i in {1..30}; do
-    if docker run --rm --network host mirror.gcr.io/library/busybox true >/dev/null 2>&1; then
-      echo "✅ Docker networking ready"
-      break
-    fi
-
-    echo "⏳ Waiting Docker networking ($i/30)..."
-    sleep 2
-  done
-
-  ip link set dev eth0 mtu 1460 || true
-
-  touch "$DOCKER_READY_FILE"
-  sync
-
-else
-  echo "=== Docker already initialized, skipping bootstrap ==="
-fi
-
-docker info | grep "Docker Root Dir"
-
-
-
-echo "=== Waiting for network ==="
-echo "=== Ensuring network OR cached images ==="
-
-if ! docker image inspect mirror.gcr.io/library/busybox >/dev/null 2>&1; then
-  echo "No cached image → waiting for network"
-  for i in {1..30}; do
-  if curl -sf https://registry.npmjs.org >/dev/null && \
-     curl -sf https://api.github.com >/dev/null; then
-    echo "✅ Network fully ready"
+# ==========================================
+# 1. Wait for Docker (should already be running on COS)
+# ==========================================
+echo "=== Waiting for Docker daemon ==="
+for i in {1..30}; do
+  if docker info >/dev/null 2>&1; then
+    echo "✅ Docker is ready"
     break
   fi
-  echo "⏳ Waiting for full internet connectivity..."
+  echo "⏳ Waiting for Docker ($i/30)..."
   sleep 2
 done
-else
-  echo "Cached image exists → skip network wait"
+docker info >/dev/null 2>&1 || {
+  echo "❌ Docker not ready after 60s"
+  exit 1
+}
+
+# ==========================================
+# 2. Wait for GCP auth (metadata service)
+# ==========================================
+echo "=== Checking GCP metadata (service account) ==="
+if ! curl -sf -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email >/dev/null; then
+  echo "❌ No service account attached or metadata unavailable"
+  exit 1
 fi
 
-docker rm -f health-server 2>/dev/null || true
-iptables -I INPUT 1 -p tcp -s 35.191.0.0/16 --dport 8080 -j ACCEPT
-iptables -I INPUT 2 -p tcp -s 130.211.0.0/22 --dport 8080 -j ACCEPT
-
-docker run -d \
-  --name health-server \
-  --network host \
-  --restart always \
-  python:3-alpine \
-  sh -c "python -m http.server 8080"
-
-# ==========================================
-# 4. Wait for GCP metadata
-# ==========================================
-echo "=== Fetching Metadata Token ==="
-for i in {1..10}; do
-  if get_metadata "instance/id" >/dev/null; then
-    break
-  fi
-  sleep 2
-done
-
-TOKEN=$(get_token)
-if [ -z "$TOKEN" ]; then
-  echo "❌ Failed to get access token"
+echo "=== Checking Secret Manager access ==="
+if ! retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
+  echo "❌ Cannot access Secret Manager"
   exit 1
 fi
 
 # ==========================================
-# 5. Get Secrets from Secret Manager
+# 3. Fetch secrets from Secret Manager
 # ==========================================
 echo "=== Get Secrets from Secret Manager ==="
-DB_PASSWORD=$(retry get_secret "${DB_SECRET_NAME}") || {
+DB_PASSWORD=$(retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
   exit 1
 }
-N8N_KEY=$(retry get_secret "${N8N_KEY_SECRET_NAME}") || {
+
+N8N_KEY=$(retry gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch N8N_KEY"
   exit 1
 }
-CF_TOKEN=$(retry get_secret "${CF_TUNNEL_SECRET_NAME}") || {
+
+CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
   echo "❌ CRITICAL: Failed to fetch CF_TOKEN"
   exit 1
 }
 
-if [ -z "$DB_PASSWORD" ] || [ -z "$N8N_KEY" ] || [ -z "$CF_TOKEN" ]; then
-  echo "❌ One or more secrets are empty"
-  exit 1
-fi
-echo "✅ All secrets fetched successfully"
+echo "✅ All secrets fetched successfully."
 
 # ==========================================
-# 6. Mount Persistent Data Disk
+# 4. Mount persistent data disk
 # ==========================================
 echo "=== Mount Persistent Data Disk ==="
-DATA_DISK="/dev/disk/by-id/google-n8n-data"
+# COS convention: /mnt/disks/<name>
+DATA_DIR="/mnt/disks/n8n-data"
+
 for i in {1..30}; do
-  if [ -b "$DATA_DISK" ]; then
+  if [ -b "/dev/disk/by-id/google-n8n-data" ]; then
     echo "✅ Disk attached"
     break
   fi
-  echo "⏳ Waiting for disk ($i/30)..."
+  echo "⏳ Waiting for disk attachment ($i/30)..."
   sleep 2
 done
 
+DATA_DISK="/dev/disk/by-id/google-n8n-data"
 if [ ! -b "$DATA_DISK" ]; then
   echo "❌ CRITICAL: Persistent disk not attached"
   exit 1
 fi
 
+# Format if empty (first boot)
 if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
   echo "Formatting new persistent disk..."
   mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DATA_DISK"
 fi
 
-mkdir -p /mnt/disks/data
+mkdir -p "$DATA_DIR"
+fsck -a "$DATA_DISK" || true
+mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
 
-mount -o discard,defaults "$DATA_DISK" /mnt/disks/data
-
-mkdir -p /mnt/disks/data/postgres
-chown -R 70:70 /mnt/disks/data/postgres
-
-echo "=== Setup Swap on persistent disk ==="
-SWAP_FILE="/mnt/disks/data/swapfile"
-if [ ! -f "$SWAP_FILE" ]; then
-  fallocate -l 2G "$SWAP_FILE"
-  chmod 600 "$SWAP_FILE"
-  mkswap "$SWAP_FILE"
-fi
-if ! swapon --show | grep -q "$SWAP_FILE"; then
-  swapon "$SWAP_FILE"
-fi
-sysctl -w vm.swappiness=10
-
-mkdir -p /mnt/disks/data/n8n
-
-# force correct ownership for n8n runtime
-chown -R 1000:1000 /mnt/disks/data/n8n
-
-# remove dangerous world-writable perms if they exist
-chmod 700 /mnt/disks/data/n8n || true
-
-# verify ownership
-N8N_UID=$(stat -c '%u' /mnt/disks/data/n8n)
-N8N_GID=$(stat -c '%g' /mnt/disks/data/n8n)
-
-if [ "$N8N_UID" != "1000" ] || [ "$N8N_GID" != "1000" ]; then
-  echo "❌ Invalid n8n directory ownership: ${N8N_UID}:${N8N_GID}"
-  exit 1
-fi
-
-echo "✅ n8n directory ownership verified"
-
-mkdir -p /home/docker/n8n
+# Ensure postgres directory exists with correct permissions (uid 70 for alpine postgres)
+mkdir -p "$DATA_DIR/postgres"
+chown -R 70:70 "$DATA_DIR/postgres"
 
 # ==========================================
-# 7. Docker Network + Image Pull
+# 5. Resolve container images (AR mirror with fallback)
 # ==========================================
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net || true
+echo "=== Resolve AR Images ==="
+N8N_TARGET="${n8n_ar_image}"
+retry gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
 
-DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")
-if [ -z "$DOCKER_ROOT" ]; then
-  DOCKER_ROOT="/mnt/stateful_partition"
-  echo "⚠️ Docker not ready, fallback to $DOCKER_ROOT"
+if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for n8n → fallback to public"
+  N8N_TARGET="${n8n_image}"
 fi
+echo "Using n8n image: $N8N_TARGET"
 
-echo "Disk check path: $DOCKER_ROOT"
-df -h "$DOCKER_ROOT"
-
-AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
-
-if [ "$AVAIL_KB" -lt 2097152 ]; then
-  echo "⚠️ Low disk space on $DOCKER_ROOT ($((AVAIL_KB/1024))MB free). Cleaning..."
-  docker system prune -af || true
-  AVAIL_KB=$(df --output=avail "$DOCKER_ROOT" | tail -1 | xargs)
+CF_TARGET="${cloudflared_ar_image}"
+if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for cloudflared → fallback to public"
+  CF_TARGET="${cloudflared_image}"
 fi
+echo "Using cloudflared image: $CF_TARGET"
 
-if [ "$AVAIL_KB" -lt 1048576 ]; then
-  echo "❌ CRITICAL: Still low disk space ($((AVAIL_KB/1024))MB)"
-  exit 1
-fi
+# ==========================================
+# 6. Write environment file
+# ==========================================
+echo "=== Setup Environment ==="
+COMPOSE_DIR="/var/lib/docker/compose/n8n"
+mkdir -p "$COMPOSE_DIR"
 
-echo "=== Docker auth for Artifact Registry (COS-safe) ==="
-TOKEN=$(get_token)
-
-if [ -n "${n8n_ar_image:-}" ]; then
-  AR_DOMAIN=$(echo "${n8n_ar_image}" | cut -d'/' -f1)
-
-  mkdir -p /mnt/stateful_partition/docker-config
-  export DOCKER_CONFIG=/mnt/stateful_partition/docker-config
-
-  AUTH=$(printf "oauth2accesstoken:%s" "$TOKEN" | base64 -w 0)
-
-  cat > "$DOCKER_CONFIG/config.json" <<EOF
-{
-  "auths": {
-    "${AR_DOMAIN}": {
-      "auth": "${AUTH}"
-    }
-  }
-}
+cat <<EOF > "$COMPOSE_DIR/.env"
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+N8N_IMAGE=$N8N_TARGET
+CLOUDFLARED_IMAGE=$CF_TARGET
+DATA_DIR=$DATA_DIR
 EOF
+chmod 600 "$COMPOSE_DIR/.env"
 
-  echo "✅ Docker auth configured for ${AR_DOMAIN}"
-else
-  echo "⚠️ n8n_ar_image not set → skipping AR auth"
+# ==========================================
+# 7. Copy docker-compose and healthz-sidecar files
+# ==========================================
+echo "=== Setup Docker Compose ==="
+
+# Copy compose file (rendered by Terraform templatefile or baked into image)
+# On COS, we write the compose file directly since we can't rely on /opt
+cp /var/lib/cloud/instance/scripts/docker-compose.cos.yml "$COMPOSE_DIR/docker-compose.yml" 2>/dev/null || true
+
+# If compose file wasn't provided via cloud-init, write it inline
+if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
+  cat <<'COMPOSEFILE' > "$COMPOSE_DIR/docker-compose.yml"
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    labels:
+      container_name: "postgres"
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: $${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - $${DATA_DIR}/postgres:/var/lib/postgresql/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  n8n:
+    image: $${N8N_IMAGE}
+    restart: unless-stopped
+    labels:
+      container_name: "n8n"
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
+      N8N_ENCRYPTION_KEY: $${N8N_KEY}
+      N8N_EXECUTIONS_MODE: regular
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
+      N8N_LOG_LEVEL: error
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_RUNNERS_MODE: internal
+      N8N_HOST: n8n-gcp.pp.ua
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://n8n-gcp.pp.ua/
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PORT: 5678
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 420s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloudflared:
+    image: $${CLOUDFLARED_IMAGE}
+    restart: unless-stopped
+    labels:
+      container_name: "cloudflared"
+    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
+    ports:
+      - "127.0.0.1:2000:2000"
+    depends_on:
+      n8n:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  healthz-sidecar:
+    build:
+      context: ./healthz-sidecar
+    restart: unless-stopped
+    labels:
+      container_name: "healthz-sidecar"
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      N8N_URL: "http://n8n:5678/rest/active-workflows"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: "n8n"
+      POSTGRES_DB: "n8n"
+      POSTGRES_PASSWORD: $${DB_PASSWORD}
+      CLOUDFLARED_METRICS_URL: "http://cloudflared:2000/ready"
+      BOOTSTRAP_WINDOW_SECONDS: "1800"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+COMPOSEFILE
 fi
 
-echo "=== Pull Docker images ==="
-pull_with_fallback() {
-  local name="$1"
-  local primary="$2"
-  local fallback="$3"
-  local selected="$primary"
+# ==========================================
+# 8. Copy healthz-sidecar files
+# ==========================================
+mkdir -p "$COMPOSE_DIR/healthz-sidecar"
 
-  if docker image inspect "$primary" >/dev/null 2>&1; then
-    echo "✅ Using cached $name image: $primary" >&2
-    printf "%s" "$primary"
-    return 0
-  fi
+# The healthz-sidecar Dockerfile and server are expected to be
+# available at the compose context path. They are baked into the
+# instance template via metadata or fetched from GCS.
+# For now, write them inline if not already present.
+if [ ! -f "$COMPOSE_DIR/healthz-sidecar/healthz_server.py" ]; then
+  echo "⚠️ healthz-sidecar files not found — they should be provided via instance metadata or GCS"
+fi
 
-  echo "→ Pulling $name from Artifact Registry: $primary" >&2
+# ==========================================
+# 9. Pull images and start services
+# ==========================================
+echo "=== Pulling images ==="
+cd "$COMPOSE_DIR"
 
-  for i in 1 2 3; do
-    if timeout 1800 docker pull "$primary" >&2; then
-      echo "✅ Pulled $name from AR (attempt $i)" >&2
-      printf "%s" "$primary"
-      return 0
-    fi
-
-    echo "⚠️ Pull failed (attempt $i), cleaning broken layers..." >&2
-    docker image rm -f "$primary" >/dev/null 2>&1 || true
-    docker builder prune -af >/dev/null 2>&1 || true
-    sleep 3
-  done
-
-  echo "⚠️ $name AR pull failed, falling back to public image" >&2
-  selected="$fallback"
-
-  if ! timeout 1800 docker pull "$selected" >&2; then
-    echo "❌ CRITICAL: fallback pull also failed" >&2
-    exit 1
-  fi
-
-  printf "%s" "$selected"
+retry timeout 1800 docker pull "$N8N_TARGET" || {
+  echo "❌ Docker pull failed: $N8N_TARGET"
+  exit 1
 }
 
-N8N_TARGET=$(pull_with_fallback "n8n" "${n8n_ar_image}" "${n8n_image}")
-CF_TARGET=$(pull_with_fallback "cloudflared" "${cloudflared_ar_image}" "${cloudflared_image}")
-POSTGRES_IMAGE="postgres:15-alpine"
-docker image inspect "$POSTGRES_IMAGE" >/dev/null 2>&1 || docker pull "$POSTGRES_IMAGE"
+retry timeout 600 docker pull "$CF_TARGET" || {
+  echo "❌ Docker pull failed: $CF_TARGET"
+  exit 1
+}
 
-cat <<EOF > /home/docker/runtime.env
-BACKUP_BUCKET=${BACKUP_BUCKET_NAME}
-N8N_TARGET=$N8N_TARGET
-CF_TARGET=$CF_TARGET
-POSTGRES_IMAGE=$POSTGRES_IMAGE
-DB_NAME=${db_name}
-DB_USER=${db_user}
-DB_PORT=${db_port}
-N8N_PUBLIC_HOST=${n8n_public_host}
-EOF
-chmod 600 /home/docker/runtime.env
+# Pull postgres image
+retry timeout 600 docker pull postgres:15-alpine || {
+  echo "❌ Docker pull failed: postgres:15-alpine"
+  exit 1
+}
 
 # ==========================================
-# 8. Start Postgres
+# 10. Start services in order
 # ==========================================
-umask 077
-mkdir -p /dev/shm/n8n-secrets
-printf "%s" "$DB_PASSWORD" > /dev/shm/n8n-secrets/db_password
-printf "%s" "$N8N_KEY"     > /dev/shm/n8n-secrets/n8n_key
-
-
-chown -R 1000:1000 /dev/shm/n8n-secrets
-chmod 600 /dev/shm/n8n-secrets/*
-
-
-echo "=== Verify Secrets Before Start ==="
-for f in db_password n8n_key; do
-  if [ ! -s "/dev/shm/n8n-secrets/$f" ]; then
-    echo "❌ Missing secret: $f"
-    exit 1
-  fi
-done
-
-docker rm -f postgres 2>/dev/null || true
-
-echo "=== Ensure Docker network ==="
-docker network inspect n8n-net >/dev/null 2>&1 || \
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
-
 echo "=== Starting Postgres ==="
-docker run -d \
-  --name postgres \
-  --oom-score-adj -900 \
-  --stop-timeout 30 \
-  --memory="512m" \
-  --memory-swap="512m" \
-  --network n8n-net \
-  --restart unless-stopped \
-  -p 127.0.0.1:5432:5432 \
-  -v /mnt/disks/data/postgres:/var/lib/postgresql/data \
-  -v /dev/shm/n8n-secrets/db_password:/run/secrets/db_password:ro \
-  -e POSTGRES_DB="${db_name}" \
-  -e POSTGRES_USER="${db_user}" \
-  -e POSTGRES_PASSWORD_FILE=/run/secrets/db_password \
-  --health-cmd="pg_isready -U ${db_user}" \
-  --health-interval=5s \
-  --health-timeout=3s \
-  --health-retries=5 \
-  "$POSTGRES_IMAGE"
-
-
+docker compose up -d postgres || {
+  echo "❌ docker compose up postgres failed"
+  docker compose logs postgres --tail=50
+  exit 1
+}
 
 echo "=== Waiting for Postgres ==="
 READY=false
-for i in {1..30}; do
-  if docker exec postgres pg_isready -U "${db_user}" >/dev/null 2>&1; then
-    echo "✅ Postgres ready"
-    READY=true
-    break
+for i in {1..60}; do
+  if docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
+    if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      echo "✅ Postgres fully ready"
+      READY=true
+      break
+    fi
   fi
+  echo "⏳ Waiting for Postgres ($i/60)..."
   sleep 2
 done
 
-
 if [ "$READY" != "true" ]; then
-  echo "❌ Postgres failed to start"
-  docker logs postgres --tail=50 || true
+  echo "❌ Postgres not ready"
+  docker compose logs postgres --tail=50
   exit 1
 fi
 
-echo "=== DB HEALTH CHECK BEFORE RESTORE ==="
-
-if check_db_health; then
-  echo "→ DB healthy → SKIP restore"
-else
-  echo "→ DB unhealthy → restoring..."
-  restore_db
-fi
-
-
-
-# ==========================================
-# 9. Backup Restore (DR only)
-# ==========================================
-
-
-
-docker rm -f n8n 2>/dev/null || true
-docker network inspect n8n-net >/dev/null 2>&1 || \
-docker network create --opt com.docker.network.driver.mtu=1460 n8n-net
-
-
-
-
-echo "→ Waiting for Postgres before starting n8n..."
-
-for i in {1..60}; do
-  if docker exec postgres pg_isready -U "$db_user" >/dev/null 2>&1; then
-    echo "→ Postgres is ready"
-    break
-  fi
-  echo "→ waiting... ($i)"
-  sleep 2
-done
-# ==========================================
-# 10. Start n8n (no queue mode, no Redis, no worker)
-# ==========================================
-echo "=== Starting n8n ==="
-#N8N_RUNNER_TOKEN="my-secret-token-12345"
-docker run -d \
-      --name n8n \
-      --init \
-      --oom-score-adj 200 \
-      --stop-timeout 30 \
-      --network n8n-net \
-      --restart unless-stopped \
-      -p 127.0.0.1:5678:5678 \
-      --memory="900m" \
-      --memory-swap="1500m" \
-      -v /dev/shm/n8n-secrets:/run/secrets:ro \
-      -v /mnt/disks/data/n8n:/home/node/.n8n \
-      -e DB_TYPE=postgresdb \
-      -e DB_POSTGRESDB_HOST=postgres \
-      -e DB_POSTGRESDB_PORT=5432 \
-      -e DB_POSTGRESDB_DATABASE="${db_name}" \
-      -e DB_POSTGRESDB_USER="${db_user}" \
-      -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
-      -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-      -e N8N_RUNNERS_ENABLED=false \
-      -e N8N_TRUST_PROXY=true \
-      -e N8N_LOG_LEVEL=warn \
-      -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
-      -e NODE_OPTIONS="--max-old-space-size=512" \
-      -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
-      -e EXECUTIONS_DATA_PRUNE=true \
-      -e EXECUTIONS_DATA_MAX_AGE=24 \
-      -e N8N_HOST=n8n-gcp.pp.ua \
-      -e N8N_PROTOCOL=https \
-      -e WEBHOOK_URL=https://n8n-gcp.pp.ua/ \
-      "$N8N_TARGET"
-
-  
-echo "=== Verifying n8n runtime permissions ==="
-
-docker exec n8n sh -c '
-  touch /home/node/.n8n/.permission-test &&
-  rm -f /home/node/.n8n/.permission-test
-' || {
-  echo "❌ n8n cannot write to runtime directory"
+echo "=== Starting Application Containers ==="
+docker compose up -d n8n cloudflared healthz-sidecar || {
+  echo "❌ docker compose up apps failed"
+  docker compose logs --tail=100
   exit 1
 }
 
-echo "✅ n8n runtime writable"
-
-echo "=== Waiting for n8n ==="
-
-N8N_READY=false
-for startup_retry in {1..60}; do
-  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
-    echo "✅ n8n is ready"
-    echo "=== Warming up n8n runners ==="
-
-    for warmup_retry in {1..12}; do
-      if curl -sf http://127.0.0.1:5678/rest/settings >/dev/null 2>&1; then
-        echo "✅ API ready"
-        break
-      fi
-
-      echo "⏳ Waiting API warmup ($warmup_retry/12)..."
-      sleep 5
-    done
-
-sleep 15
-    N8N_READY=true
-    break
-  fi
-  echo "⏳ Waiting for n8n ($startup_retry/60)..."
-  sleep 5
-done
-
-if [ "$N8N_READY" != "true" ]; then
-  echo "❌ n8n failed to become ready"
-  docker logs n8n --tail=50 || true
-  exit 1
-fi
-
 # ==========================================
-# 11. Start cloudflared
+# 11. Verify startup
 # ==========================================
-docker rm -f cloudflared 2>/dev/null || true
-
-mkdir -p /mnt/disks/data/n8n-secrets
-
-echo "=== n8n warmup ==="
-sleep 5
-
-echo "=== Starting cloudflared ==="
-if [ -z "$CF_TOKEN" ]; then
-  echo "❌ CF_TOKEN empty"
-  exit 1
-fi
-docker run -d \
-  --name cloudflared \
-  --stop-timeout 30 \
-  --memory="128m" \
-  --memory-swap="128m" \
-  --network n8n-net \
-  --restart unless-stopped \
-  -p 127.0.0.1:2000:2000 \
-  "$CF_TARGET" \
-  tunnel \
-  --grace-period 30s \
-  --retries 5 \
-  --protocol http2 \
-  --metrics 0.0.0.0:2000 \
-  run --token "$CF_TOKEN"
-
-
-
-# ==========================================
-# 12. Final health verification
-# ==========================================
-echo "=== Final Health Verification ==="
+echo "=== Verifying startup ==="
 HEALTHY=false
 for i in {1..60}; do
   n8n_ok=false
   cf_ok=false
 
-  if curl -sf http://127.0.0.1:5678/healthz | grep -q '"status":"ok"'; then
+  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
     n8n_ok=true
   fi
-  if docker logs cloudflared 2>&1 | grep -q "Registered tunnel connection"; then
+
+  if curl -fsS http://127.0.0.1:2000/ready >/dev/null 2>&1; then
     cf_ok=true
   fi
 
   if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
-    echo "✅ n8n + cloudflared are healthy"
+    echo "✅ n8n + cloudflared are up and healthy"
     HEALTHY=true
     break
   fi
-  echo "⏳ Verifying ($i/60)..."
-  sleep 5
+
+  echo "⏳ Waiting ($i/60)..."
+  sleep 10
 done
 
-if [ "$HEALTHY" != "true" ]; then
-  echo "❌ CRITICAL: not all services healthy"
-  echo "=== n8n logs ==="
-  docker logs n8n --tail=30 || true
-  echo "=== cloudflared logs ==="
-  docker logs cloudflared --tail=30 || true
-fi
-
-# ==========================================
-# 13. Backup via systemd timer
-# ==========================================
-echo "=== Setup Backup Timer ==="
-cat <<'BACKUPEOF' > /home/docker/backup.sh
-#!/bin/bash
-set -e
-set -u
-
-: "${DB_USER:?missing}"
-: "${DB_NAME:?missing}"
-: "${BACKUP_BUCKET:?missing}"
-TOKEN=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-mkdir -p /mnt/disks/data/tmp
-FILE="/mnt/disks/data/tmp/n8n-${TIMESTAMP}.sql.gz"
-
-COUNT=$(docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT count(*) FROM workflow_entity;" | xargs)
-if [ "$COUNT" -lt 1 ]; then
-  echo "⚠️ SKIP backup: no workflows"
-  exit 0
-fi
-
-SIZE=$(docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT pg_database_size('$DB_NAME');" | xargs)
-if [ "$SIZE" -lt 1000000 ]; then
-  echo "⚠️ SKIP backup: DB too small ($SIZE bytes)"
-  exit 0
-fi
-
-AVAIL_KB=$(df --output=avail /tmp | tail -1 | xargs)
-if [ "$AVAIL_KB" -lt 512000 ]; then
-  echo "❌ SKIP backup: insufficient disk space (${AVAIL_KB}KB free in /tmp)"
+if [ "$HEALTHY" = true ]; then
+  echo "=== COS Startup complete ==="
+  docker compose ps
+else
+  echo "❌ CRITICAL: startup failed"
+  docker compose logs --tail=100
   exit 1
 fi
 
-BACKUP_START=$(date +%s)
-docker exec postgres psql -U "$DB_USER" -d "$DB_NAME" -c "CHECKPOINT;" 2>/dev/null || true
-timeout 300 docker exec postgres pg_dump -U "$DB_USER" --no-owner --no-acl --clean --if-exists --serializable-deferrable --lock-wait-timeout=10000 "$DB_NAME" | gzip > "$FILE"
-BACKUP_DURATION=$(( $(date +%s) - BACKUP_START ))
-echo "Backup duration: ${BACKUP_DURATION}s"
-
-if [ ! -s "$FILE" ]; then
-  echo "❌ EMPTY BACKUP"
-  exit 1
-fi
-
-cd /mnt/disks/data/tmp
-sha256sum "$(basename "$FILE")" > "$FILE.sha256"
-
-curl --max-time 300 -sf -X POST -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/octet-stream" \
-     --data-binary @"$FILE" \
-     "https://storage.googleapis.com/upload/storage/v1/b/"$BACKUP_BUCKET"/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz"
-
-curl --max-time 60 -sf -X POST -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: text/plain" \
-     --data-binary @"$FILE.sha256" \
-     "https://storage.googleapis.com/upload/storage/v1/b/"$BACKUP_BUCKET"/o?uploadType=media&name=n8n/n8n-${TIMESTAMP}.sql.gz.sha256"
-
-LOCAL_SUM=$(cat "$FILE.sha256" 2>/dev/null || true)
-REMOTE_SUM=$(curl --max-time 60 -sf -H "Authorization: Bearer $TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/"$BACKUP_BUCKET"/o/n8n%2Fn8n-${TIMESTAMP}.sql.gz.sha256?alt=media" 2>/dev/null || true)
-if [ -n "$REMOTE_SUM" ] && [ -n "$LOCAL_SUM" ] && [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
-  echo "❌ Checksum mismatch after upload"
-  exit 1
-fi
-
-rm -f "$FILE" "$FILE.sha256"
-
-CUTOFF_DATE=$(date -d '7 days ago' +%Y%m%d)
-OLD_BACKUPS=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-  "https://storage.googleapis.com/storage/v1/b/"$BACKUP_BUCKET"/o?prefix=n8n/n8n-" \
-  | grep -o '"name": "[^"]*' | cut -d'"' -f4 \
-  | grep -E '\.(sql\.gz|sha256)$' || true)
-
-while IFS= read -r obj; do
-  FILE_DATE=$(echo "$obj" | grep -o '[0-9]\{8\}' | head -1)
-  if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" -lt "$CUTOFF_DATE" ]; then
-    ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$obj', safe=''))")
-    curl -sf -X DELETE -H "Authorization: Bearer $TOKEN" \
-      "https://storage.googleapis.com/storage/v1/b/"$BACKUP_BUCKET"/o/${ENCODED}" || true
-    echo "Deleted old backup: $obj"
-  fi
-done <<< "$OLD_BACKUPS"
-
-echo "BACKUP_OK $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-BACKUPEOF
-
-# Inject runtime values into backup.sh
-
-chmod +x /home/docker/backup.sh
-
-cat <<'SVCEOF' > /etc/systemd/system/n8n-backup.service || true
-[Unit]
-Description=n8n Postgres Backup
-
-[Service]
-Type=oneshot
-EnvironmentFile=/home/docker/runtime.env
-ExecStart=/home/docker/backup.sh
-SVCEOF
-
-cat <<'TMREOF' > /etc/systemd/system/n8n-backup.timer || true
-[Unit]
-Description=Run n8n Backup every 10 min
-[Timer]
-OnBootSec=15min
-OnUnitActiveSec=60min
-[Install]
-WantedBy=timers.target
-TMREOF
-
-systemctl daemon-reload || true
-systemctl enable --now n8n-backup.timer || echo "⚠️ systemd timer skipped"
-
-if [ "$HEALTHY" != "true" ]; then
-  echo "⚠️ WARNING: not all services healthy at startup end, but continuing"
-  echo "=== n8n logs ==="
-  docker logs n8n --tail=20 || true
-  echo "=== cloudflared logs ==="
-  docker logs cloudflared --tail=20 || true
-fi
-
-echo "✅ Startup complete"
+echo "=== ALL DONE ==="
+exit 0
