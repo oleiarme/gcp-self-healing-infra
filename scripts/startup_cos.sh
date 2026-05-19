@@ -66,6 +66,7 @@ if [ -z "$PROJECT_ID" ]; then
 fi
 
 fetch_secret() {
+  # shellcheck disable=SC2034
   local secret_name="$1"
   local url="https://secretmanager.googleapis.com/v1/projects/$${PROJECT_ID}/secrets/$${secret_name}/versions/latest:access"
   local res
