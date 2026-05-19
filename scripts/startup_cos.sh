@@ -1,0 +1,389 @@
+#!/bin/bash
+# startup_cos.sh — COS (Container-Optimized OS) startup script
+# Equivalent of scripts/startup.sh for Ubuntu, but tailored for COS:
+#   - No apt-get install (Docker and gcloud are built-in)
+#   - No systemd services (Docker already running)
+#   - Uses docker-compose with labels and json-file logging
+#   - Metadata google-logging-enabled=true, google-monitoring-enabled=true (set in Terraform)
+#
+# Requirements: 8.4, 8.5
+set -e
+set -o pipefail
+exec > >(tee /var/log/startup.log) 2>&1
+
+echo "=== COS Startup Script ==="
+echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+retry() {
+  for i in {1..5}; do
+    "$@" && return 0
+    sleep 5
+  done
+  return 1
+}
+
+# ==========================================
+# 1. Wait for Docker (should already be running on COS)
+# ==========================================
+echo "=== Waiting for Docker daemon ==="
+for i in {1..30}; do
+  if docker info >/dev/null 2>&1; then
+    echo "✅ Docker is ready"
+    break
+  fi
+  echo "⏳ Waiting for Docker ($i/30)..."
+  sleep 2
+done
+docker info >/dev/null 2>&1 || {
+  echo "❌ Docker not ready after 60s"
+  exit 1
+}
+
+# ==========================================
+# 2. Wait for GCP auth (metadata service)
+# ==========================================
+echo "=== Checking GCP metadata (service account) ==="
+if ! curl -sf -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email >/dev/null; then
+  echo "❌ No service account attached or metadata unavailable"
+  exit 1
+fi
+
+echo "=== Checking Secret Manager access ==="
+if ! retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}" >/dev/null 2>&1; then
+  echo "❌ Cannot access Secret Manager"
+  exit 1
+fi
+
+# ==========================================
+# 3. Fetch secrets from Secret Manager
+# ==========================================
+echo "=== Get Secrets from Secret Manager ==="
+DB_PASSWORD=$(retry gcloud secrets versions access latest --secret="${DB_SECRET_NAME}") || {
+  echo "❌ CRITICAL: Failed to fetch DB_PASSWORD"
+  exit 1
+}
+
+N8N_KEY=$(retry gcloud secrets versions access latest --secret="${N8N_KEY_SECRET_NAME}") || {
+  echo "❌ CRITICAL: Failed to fetch N8N_KEY"
+  exit 1
+}
+
+CF_TOKEN=$(retry gcloud secrets versions access latest --secret="${CF_TUNNEL_SECRET_NAME}") || {
+  echo "❌ CRITICAL: Failed to fetch CF_TOKEN"
+  exit 1
+}
+
+echo "✅ All secrets fetched successfully."
+
+# ==========================================
+# 4. Mount persistent data disk
+# ==========================================
+echo "=== Mount Persistent Data Disk ==="
+# COS convention: /mnt/disks/<name>
+DATA_DIR="/mnt/disks/n8n-data"
+
+for i in {1..30}; do
+  if [ -b "/dev/disk/by-id/google-n8n-data" ]; then
+    echo "✅ Disk attached"
+    break
+  fi
+  echo "⏳ Waiting for disk attachment ($i/30)..."
+  sleep 2
+done
+
+DATA_DISK="/dev/disk/by-id/google-n8n-data"
+if [ ! -b "$DATA_DISK" ]; then
+  echo "❌ CRITICAL: Persistent disk not attached"
+  exit 1
+fi
+
+# Format if empty (first boot)
+if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
+  echo "Formatting new persistent disk..."
+  mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DATA_DISK"
+fi
+
+mkdir -p "$DATA_DIR"
+fsck -a "$DATA_DISK" || true
+mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
+
+# Ensure postgres directory exists with correct permissions (uid 70 for alpine postgres)
+mkdir -p "$DATA_DIR/postgres"
+chown -R 70:70 "$DATA_DIR/postgres"
+
+# ==========================================
+# 5. Resolve container images (AR mirror with fallback)
+# ==========================================
+echo "=== Resolve AR Images ==="
+N8N_TARGET="${n8n_ar_image}"
+retry gcloud auth configure-docker "${ar_location}-docker.pkg.dev" --quiet
+
+if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for n8n → fallback to public"
+  N8N_TARGET="${n8n_image}"
+fi
+echo "Using n8n image: $N8N_TARGET"
+
+CF_TARGET="${cloudflared_ar_image}"
+if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for cloudflared → fallback to public"
+  CF_TARGET="${cloudflared_image}"
+fi
+echo "Using cloudflared image: $CF_TARGET"
+
+# ==========================================
+# 6. Write environment file
+# ==========================================
+echo "=== Setup Environment ==="
+COMPOSE_DIR="/var/lib/docker/compose/n8n"
+mkdir -p "$COMPOSE_DIR"
+
+cat <<EOF > "$COMPOSE_DIR/.env"
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+N8N_IMAGE=$N8N_TARGET
+CLOUDFLARED_IMAGE=$CF_TARGET
+DATA_DIR=$DATA_DIR
+EOF
+chmod 600 "$COMPOSE_DIR/.env"
+
+# ==========================================
+# 7. Copy docker-compose and healthz-sidecar files
+# ==========================================
+echo "=== Setup Docker Compose ==="
+
+# Copy compose file (rendered by Terraform templatefile or baked into image)
+# On COS, we write the compose file directly since we can't rely on /opt
+cp /var/lib/cloud/instance/scripts/docker-compose.cos.yml "$COMPOSE_DIR/docker-compose.yml" 2>/dev/null || true
+
+# If compose file wasn't provided via cloud-init, write it inline
+if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
+  cat <<'COMPOSEFILE' > "$COMPOSE_DIR/docker-compose.yml"
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    labels:
+      container_name: "postgres"
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: $${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - $${DATA_DIR}/postgres:/var/lib/postgresql/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  n8n:
+    image: $${N8N_IMAGE}
+    restart: unless-stopped
+    labels:
+      container_name: "n8n"
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: $${DB_PASSWORD}
+      N8N_ENCRYPTION_KEY: $${N8N_KEY}
+      N8N_EXECUTIONS_MODE: regular
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: 1
+      N8N_LOG_LEVEL: error
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_RUNNERS_MODE: internal
+      N8N_HOST: n8n-gcp.pp.ua
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://n8n-gcp.pp.ua/
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PORT: 5678
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 420s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloudflared:
+    image: $${CLOUDFLARED_IMAGE}
+    restart: unless-stopped
+    labels:
+      container_name: "cloudflared"
+    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
+    ports:
+      - "127.0.0.1:2000:2000"
+    depends_on:
+      n8n:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  healthz-sidecar:
+    build:
+      context: ./healthz-sidecar
+    restart: unless-stopped
+    labels:
+      container_name: "healthz-sidecar"
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      N8N_URL: "http://n8n:5678/rest/active-workflows"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: "n8n"
+      POSTGRES_DB: "n8n"
+      POSTGRES_PASSWORD: $${DB_PASSWORD}
+      CLOUDFLARED_METRICS_URL: "http://cloudflared:2000/ready"
+      BOOTSTRAP_WINDOW_SECONDS: "1800"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+COMPOSEFILE
+fi
+
+# ==========================================
+# 8. Copy healthz-sidecar files
+# ==========================================
+mkdir -p "$COMPOSE_DIR/healthz-sidecar"
+
+# The healthz-sidecar Dockerfile and server are expected to be
+# available at the compose context path. They are baked into the
+# instance template via metadata or fetched from GCS.
+# For now, write them inline if not already present.
+if [ ! -f "$COMPOSE_DIR/healthz-sidecar/healthz_server.py" ]; then
+  echo "⚠️ healthz-sidecar files not found — they should be provided via instance metadata or GCS"
+fi
+
+# ==========================================
+# 9. Pull images and start services
+# ==========================================
+echo "=== Pulling images ==="
+cd "$COMPOSE_DIR"
+
+retry timeout 1800 docker pull "$N8N_TARGET" || {
+  echo "❌ Docker pull failed: $N8N_TARGET"
+  exit 1
+}
+
+retry timeout 600 docker pull "$CF_TARGET" || {
+  echo "❌ Docker pull failed: $CF_TARGET"
+  exit 1
+}
+
+# Pull postgres image
+retry timeout 600 docker pull postgres:15-alpine || {
+  echo "❌ Docker pull failed: postgres:15-alpine"
+  exit 1
+}
+
+# ==========================================
+# 10. Start services in order
+# ==========================================
+echo "=== Starting Postgres ==="
+docker compose up -d postgres || {
+  echo "❌ docker compose up postgres failed"
+  docker compose logs postgres --tail=50
+  exit 1
+}
+
+echo "=== Waiting for Postgres ==="
+READY=false
+for i in {1..60}; do
+  if docker compose exec -T postgres pg_isready -U n8n >/dev/null 2>&1; then
+    if docker compose exec -T postgres psql -U n8n -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      echo "✅ Postgres fully ready"
+      READY=true
+      break
+    fi
+  fi
+  echo "⏳ Waiting for Postgres ($i/60)..."
+  sleep 2
+done
+
+if [ "$READY" != "true" ]; then
+  echo "❌ Postgres not ready"
+  docker compose logs postgres --tail=50
+  exit 1
+fi
+
+echo "=== Starting Application Containers ==="
+docker compose up -d n8n cloudflared healthz-sidecar || {
+  echo "❌ docker compose up apps failed"
+  docker compose logs --tail=100
+  exit 1
+}
+
+# ==========================================
+# 11. Verify startup
+# ==========================================
+echo "=== Verifying startup ==="
+HEALTHY=false
+for i in {1..60}; do
+  n8n_ok=false
+  cf_ok=false
+
+  if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
+    n8n_ok=true
+  fi
+
+  if curl -fsS http://127.0.0.1:2000/ready >/dev/null 2>&1; then
+    cf_ok=true
+  fi
+
+  if [ "$n8n_ok" = true ] && [ "$cf_ok" = true ]; then
+    echo "✅ n8n + cloudflared are up and healthy"
+    HEALTHY=true
+    break
+  fi
+
+  echo "⏳ Waiting ($i/60)..."
+  sleep 10
+done
+
+if [ "$HEALTHY" = true ]; then
+  echo "=== COS Startup complete ==="
+  docker compose ps
+else
+  echo "❌ CRITICAL: startup failed"
+  docker compose logs --tail=100
+  exit 1
+fi
+
+echo "=== ALL DONE ==="
+exit 0

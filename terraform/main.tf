@@ -387,7 +387,7 @@ resource "google_compute_instance_template" "tpl" {
 
 
   disk {
-    source_image = "ubuntu-os-cloud/ubuntu-2204-lts"
+    source_image = var.host_os == "cos" ? "cos-cloud/cos-stable" : "ubuntu-os-cloud/ubuntu-2204-lts"
     disk_size_gb = 20
     auto_delete  = true
     boot         = true
@@ -429,29 +429,54 @@ resource "google_compute_instance_template" "tpl" {
     scopes = ["cloud-platform"]
   }
 
-  metadata = {
-    # Block OS-login / project-wide SSH keys. Runbook procedures do not
-    # rely on interactive SSH — everything is either a `terraform apply`
-    # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
-    block-project-ssh-keys = "true"
-    startup-script = templatefile("${path.module}/../scripts/startup.sh", {
-      db_host               = local.effective_db_host
-      db_user               = var.db_user
-      DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
-      N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
-      CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
-      db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
-      db_port               = "5432"
-      n8n_image             = var.n8n_image
-      cloudflared_image     = var.cloudflared_image
-      n8n_ar_image          = local.n8n_ar_image
-      cloudflared_ar_image  = local.cf_ar_image
-      ar_location           = var.region
-      BACKUP_BUCKET_NAME    = var.backup_bucket_name
-
-    })
-    force_update = timestamp()
-  }
+  metadata = merge(
+    {
+      # Block OS-login / project-wide SSH keys. Runbook procedures do not
+      # rely on interactive SSH — everything is either a `terraform apply`
+      # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
+      block-project-ssh-keys = "true"
+      force_update           = timestamp()
+    },
+    # Ubuntu metadata: startup-script with apt-get, systemd, etc.
+    var.host_os == "ubuntu" ? {
+      startup-script = templatefile("${path.module}/../scripts/startup.sh", {
+        db_host               = local.effective_db_host
+        db_user               = var.db_user
+        DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
+        N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
+        CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
+        db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
+        db_port               = "5432"
+        n8n_image             = var.n8n_image
+        cloudflared_image     = var.cloudflared_image
+        n8n_ar_image          = local.n8n_ar_image
+        cloudflared_ar_image  = local.cf_ar_image
+        ar_location           = var.region
+        BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      })
+    } : {},
+    # COS metadata: google-logging-enabled, google-monitoring-enabled, user-data
+    # Requirements: 8.4, 8.10
+    var.host_os == "cos" ? {
+      google-logging-enabled    = "true"
+      google-monitoring-enabled = "true"
+      user-data = templatefile("${path.module}/../scripts/startup_cos.sh", {
+        db_host               = local.effective_db_host
+        db_user               = var.db_user
+        DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
+        N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
+        CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
+        db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : "postgres"
+        db_port               = "5432"
+        n8n_image             = var.n8n_image
+        cloudflared_image     = var.cloudflared_image
+        n8n_ar_image          = local.n8n_ar_image
+        cloudflared_ar_image  = local.cf_ar_image
+        ar_location           = var.region
+        BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      })
+    } : {}
+  )
 
   lifecycle {
     create_before_destroy = true
