@@ -14,16 +14,22 @@ from __future__ import annotations
 
 # Bootstrap package context for GCP Cloud Functions runtime
 import os
+import shutil
 import sys
-if not __package__:
-    import types
+if not __package__ and not os.environ.get("PYTEST_CURRENT_TEST"):
     _current_dir = os.path.dirname(os.path.abspath(__file__))
+    _target_dir = os.path.join(_current_dir, "sre_agent")
+    if not os.path.exists(_target_dir):
+        os.makedirs(_target_dir, exist_ok=True)
+        with open(os.path.join(_target_dir, "__init__.py"), "w") as f:
+            f.write("")
+        for _file in os.listdir(_current_dir):
+            if _file.endswith(".py") and _file != "main.py":
+                shutil.copy2(os.path.join(_current_dir, _file), os.path.join(_target_dir, _file))
     if _current_dir not in sys.path:
         sys.path.insert(0, _current_dir)
-    _pkg = types.ModuleType("sre_agent")
-    _pkg.__path__ = [_current_dir]  # type: ignore
-    sys.modules["sre_agent"] = _pkg
     __package__ = "sre_agent"
+
 
 
 import base64
