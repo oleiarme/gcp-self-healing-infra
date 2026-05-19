@@ -17,3 +17,8 @@
 ## Token Optimization (RTK)
 - Use `rtk` prefix for commands where possible (git, terraform).
 - Check savings with `rtk gain`.
+
+## Language Policy
+- **Explanations & Ideas**: Always respond in Russian.
+- **Code & Tech terms**: Keep code, commands, logs, and code-related names strictly in English.
+
