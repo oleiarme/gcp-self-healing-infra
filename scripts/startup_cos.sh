@@ -268,8 +268,7 @@ services:
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
-      N8N_RUNNERS_ENABLED: "true"
-      N8N_RUNNERS_MODE: internal
+      N8N_RUNNERS_ENABLED: "false"
       N8N_HOST: n8n-gcp.pp.ua
       N8N_PROTOCOL: https
       WEBHOOK_URL: https://n8n-gcp.pp.ua/
