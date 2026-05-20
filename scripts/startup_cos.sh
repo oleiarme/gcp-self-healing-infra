@@ -40,19 +40,19 @@ docker info >/dev/null 2>&1 || {
 }
 
 # ==========================================
-# 1.5 Install Docker Compose V2 plugin (not included in COS by default)
+# 1.5 Install Docker Compose V2 (standalone binary for COS read-only FS)
 # ==========================================
-echo "=== Installing Docker Compose plugin ==="
-DOCKER_CONFIG="/root/.docker"
-mkdir -p "$DOCKER_CONFIG/cli-plugins"
+echo "=== Installing Docker Compose ==="
+COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
 COMPOSE_VERSION="v2.32.4"
 COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
-if ! docker compose version >/dev/null 2>&1; then
-  retry curl -fsSL "$COMPOSE_URL" -o "$DOCKER_CONFIG/cli-plugins/docker-compose"
-  chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
-  echo "✅ Docker Compose $(docker compose version --short) installed"
+if [ ! -x "$COMPOSE_BIN" ]; then
+  mkdir -p /var/lib/docker/cli-plugins
+  retry curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_BIN"
+  chmod +x "$COMPOSE_BIN"
+  echo "✅ Docker Compose $($COMPOSE_BIN version --short) installed"
 else
-  echo "✅ Docker Compose already available: $(docker compose version --short)"
+  echo "✅ Docker Compose already available: $($COMPOSE_BIN version --short)"
 fi
 
 # ==========================================
@@ -207,7 +207,7 @@ chmod 600 "$COMPOSE_DIR/.env"
 # ==========================================
 # 7. Copy docker-compose and healthz-sidecar files
 # ==========================================
-echo "=== Setup Docker Compose ==="
+echo "=== Setup /var/lib/docker/cli-plugins/docker-compose ==="
 
 # Copy compose file (rendered by Terraform templatefile or baked into image)
 # On COS, we write the compose file directly since we can't rely on /opt
@@ -578,17 +578,17 @@ retry timeout 600 docker pull postgres:15-alpine || {
 # 10. Start services in order
 # ==========================================
 echo "=== Starting Postgres ==="
-docker compose up -d postgres || {
-  echo "❌ docker compose up postgres failed"
-  docker compose logs postgres --tail=50
+/var/lib/docker/cli-plugins/docker-compose up -d postgres || {
+  echo "❌ /var/lib/docker/cli-plugins/docker-compose up postgres failed"
+  /var/lib/docker/cli-plugins/docker-compose logs postgres --tail=50
   exit 1
 }
 
 echo "=== Waiting for Postgres ==="
 READY=false
 for i in {1..60}; do
-  if docker compose exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
-    if docker compose exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+  if /var/lib/docker/cli-plugins/docker-compose exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
+    if /var/lib/docker/cli-plugins/docker-compose exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
       READY=true
       break
@@ -600,14 +600,14 @@ done
 
 if [ "$READY" != "true" ]; then
   echo "❌ Postgres not ready"
-  docker compose logs postgres --tail=50
+  /var/lib/docker/cli-plugins/docker-compose logs postgres --tail=50
   exit 1
 fi
 
 echo "=== Starting Application Containers ==="
-docker compose up -d n8n cloudflared healthz-sidecar || {
-  echo "❌ docker compose up apps failed"
-  docker compose logs --tail=100
+/var/lib/docker/cli-plugins/docker-compose up -d n8n cloudflared healthz-sidecar || {
+  echo "❌ /var/lib/docker/cli-plugins/docker-compose up apps failed"
+  /var/lib/docker/cli-plugins/docker-compose logs --tail=100
   exit 1
 }
 
@@ -640,10 +640,10 @@ done
 
 if [ "$HEALTHY" = true ]; then
   echo "=== COS Startup complete ==="
-  docker compose ps
+  /var/lib/docker/cli-plugins/docker-compose ps
 else
   echo "❌ CRITICAL: startup failed"
-  docker compose logs --tail=100
+  /var/lib/docker/cli-plugins/docker-compose logs --tail=100
   exit 1
 fi
 
