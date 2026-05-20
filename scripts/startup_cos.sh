@@ -277,6 +277,7 @@ services:
       N8N_PORT: 5678
       N8N_LISTEN_ADDRESS: 0.0.0.0
       DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
+      N8N_PROXY_HOPS: 1
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
       interval: 10s
