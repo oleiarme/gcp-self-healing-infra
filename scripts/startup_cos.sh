@@ -169,6 +169,22 @@ mkdir -p "$DATA_DIR/postgres"
 chown -R 70:70 "$DATA_DIR/postgres"
 
 # ==========================================
+# 4.5. Setup Swap File
+# ==========================================
+echo "=== Setup Swap File ==="
+if [ ! -f "$DATA_DIR/swapfile" ]; then
+  echo "Creating 2GB swap file..."
+  fallocate -l 2G "$DATA_DIR/swapfile"
+  chmod 600 "$DATA_DIR/swapfile"
+  mkswap "$DATA_DIR/swapfile"
+fi
+
+if ! grep -q "$DATA_DIR/swapfile" /proc/swaps; then
+  echo "Enabling swap file..."
+  swapon "$DATA_DIR/swapfile"
+fi
+
+# ==========================================
 # 5. Resolve container images (AR mirror with fallback)
 # ==========================================
 echo "=== Resolve AR Images ==="
@@ -318,7 +334,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     environment:
-      N8N_URL: "http://n8n:5678/rest/active-workflows"
+      N8N_URL: "http://n8n:5678/healthz"
       POSTGRES_HOST: "postgres"
       POSTGRES_PORT: "5432"
       POSTGRES_USER: $${DB_USER}
