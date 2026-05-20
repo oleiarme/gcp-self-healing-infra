@@ -20,8 +20,12 @@ from typing import Optional
 
 import httpx
 
-from sre_agent.models import Diagnosis, Incident
-from sre_agent.settings import settings
+try:
+    from .models import Diagnosis, Incident
+    from .settings import settings
+except ImportError:
+    from models import Diagnosis, Incident  # type: ignore[no-redef]
+    from settings import settings  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 

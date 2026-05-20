@@ -12,7 +12,10 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from sre_agent.models import Incident
+try:
+    from .models import Incident
+except ImportError:
+    from models import Incident  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------

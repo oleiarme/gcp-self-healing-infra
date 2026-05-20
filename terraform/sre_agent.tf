@@ -188,7 +188,7 @@ data "archive_file" "sre_agent_zip" {
   type        = "zip"
   source_dir  = "${path.module}/functions/sre_agent"
   output_path = "${path.module}/.build/sre_agent.zip"
-  excludes    = ["__pycache__", "*.pyc", ".pytest_cache", "tests"]
+  excludes    = ["__pycache__", "*.pyc", ".pytest_cache", "tests", "__init__.py", "pytest.ini", "requirements-dev.txt"]
 }
 
 # Source bucket for Cloud Function deployment
