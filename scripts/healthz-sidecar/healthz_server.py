@@ -32,7 +32,7 @@ POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "n8n")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "n8n")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
-N8N_URL = os.environ.get("N8N_URL", "http://n8n:5678/rest/active-workflows")
+N8N_URL = os.environ.get("N8N_URL", "http://n8n:5678/healthz")
 CLOUDFLARED_METRICS_URL = os.environ.get("CLOUDFLARED_METRICS_URL", "http://cloudflared:2000/ready")
 
 PORT = int(os.environ.get("HEALTHZ_PORT", "8080"))

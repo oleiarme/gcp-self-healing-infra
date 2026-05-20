@@ -169,6 +169,22 @@ mkdir -p "$DATA_DIR/postgres"
 chown -R 70:70 "$DATA_DIR/postgres"
 
 # ==========================================
+# 4.5. Setup Swap File
+# ==========================================
+echo "=== Setup Swap File ==="
+if [ ! -f "$DATA_DIR/swapfile" ]; then
+  echo "Creating 2GB swap file..."
+  fallocate -l 2G "$DATA_DIR/swapfile"
+  chmod 600 "$DATA_DIR/swapfile"
+  mkswap "$DATA_DIR/swapfile"
+fi
+
+if ! grep -q "$DATA_DIR/swapfile" /proc/swaps; then
+  echo "Enabling swap file..."
+  swapon "$DATA_DIR/swapfile"
+fi
+
+# ==========================================
 # 5. Resolve container images (AR mirror with fallback)
 # ==========================================
 echo "=== Resolve AR Images ==="
@@ -268,8 +284,7 @@ services:
       EXECUTIONS_DATA_SAVE_ON_ERROR: all
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
-      N8N_RUNNERS_ENABLED: "true"
-      N8N_RUNNERS_MODE: internal
+      N8N_RUNNERS_ENABLED: "false"
       N8N_HOST: n8n-gcp.pp.ua
       N8N_PROTOCOL: https
       WEBHOOK_URL: https://n8n-gcp.pp.ua/
@@ -277,6 +292,7 @@ services:
       N8N_PORT: 5678
       N8N_LISTEN_ADDRESS: 0.0.0.0
       DB_POSTGRESDB_CONNECTION_TIMEOUT: 60000
+      N8N_PROXY_HOPS: 1
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
       interval: 10s
@@ -318,7 +334,7 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     environment:
-      N8N_URL: "http://n8n:5678/rest/active-workflows"
+      N8N_URL: "http://n8n:5678/healthz"
       POSTGRES_HOST: "postgres"
       POSTGRES_PORT: "5432"
       POSTGRES_USER: $${DB_USER}
