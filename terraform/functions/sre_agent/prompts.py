@@ -99,7 +99,7 @@ Condensed diagnostic patterns from the operational runbook:
 Check: `docker compose ps postgres`, verify postgres is running and accepting connections.
 - OOM / exit code 137 → Workflow memory leak or e2-micro resource exhaustion. \
 Check: `docker stats`, reduce n8n workflow concurrency.
-- Restart loop (container keeps restarting) → Check `docker compose logs n8n --tail=50` \
+- Restart loop (container keeps restarting) → Check `docker compose logs --tail=50 n8n` \
 for startup errors (DB migration failure, encryption key mismatch, missing env vars).
 
 ### PostgreSQL
@@ -112,7 +112,7 @@ Check: `SELECT * FROM pg_stat_activity WHERE state != 'idle' ORDER BY query_star
 
 ### cloudflared
 - Tunnel disconnected / connection reset → Check cloudflared container logs: \
-`docker compose logs cloudflared --tail=30`. Verify tunnel token is valid.
+`docker compose logs --tail=30 cloudflared`. Verify tunnel token is valid.
 - 5xx errors from edge → Upstream (n8n) is unhealthy. Check n8n container status first.
 - ERR  Failed to serve quic connection → Usually transient; cloudflared reconnects automatically.
 

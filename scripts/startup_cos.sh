@@ -45,7 +45,7 @@ docker info >/dev/null 2>&1 || {
 echo "=== Installing Docker Compose ==="
 COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
 COMPOSE_VERSION="v2.32.4"
-COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
 if [ ! -x "$COMPOSE_BIN" ]; then
   mkdir -p /var/lib/docker/cli-plugins
   retry curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_BIN"
@@ -580,7 +580,7 @@ retry timeout 600 docker pull postgres:15-alpine || {
 echo "=== Starting Postgres ==="
 /var/lib/docker/cli-plugins/docker-compose up -d postgres || {
   echo "❌ /var/lib/docker/cli-plugins/docker-compose up postgres failed"
-  /var/lib/docker/cli-plugins/docker-compose logs postgres --tail=50
+  /var/lib/docker/cli-plugins/docker-compose logs --tail=50 postgres
   exit 1
 }
 
@@ -600,7 +600,7 @@ done
 
 if [ "$READY" != "true" ]; then
   echo "❌ Postgres not ready"
-  /var/lib/docker/cli-plugins/docker-compose logs postgres --tail=50
+  /var/lib/docker/cli-plugins/docker-compose logs --tail=50 postgres
   exit 1
 fi
 

@@ -573,7 +573,7 @@ export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig 
 | `gcloud compute ssh $INSTANCE --zone=$ZONE --tunnel-through-iap --command="..."` | Run single command on VM |
 | `tail -f /var/log/startup.log` | Full startup trace (run on VM) |
 | `docker ps` | Container status (run on VM) |
-| `docker logs n8n --tail=50` | n8n errors (run on VM) |
+| `docker logs --tail=50 n8n` | n8n errors (run on VM) |
 | `df -h && ls -la /mnt/disks/data/postgres/` | Check disk mounted and data present (run on VM) |
 | `ls -l /dev/disk/by-id/` | Verify disk symlinks (run on VM) |
 | `gcloud compute instances get-serial-port-output $INSTANCE --zone=$ZONE` | Serial console (when SSH fails) |
