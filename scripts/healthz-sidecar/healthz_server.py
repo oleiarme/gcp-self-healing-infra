@@ -61,7 +61,7 @@ def check_postgres() -> dict:
             conn.close()
 
         elapsed = time.time() - start
-        if elapsed > 1.0:
+        if elapsed > 5.0:
             return {"ok": False, "check": "postgres", "error": f"too slow: {elapsed:.2f}s"}
         return {"ok": True, "check": "postgres", "latency_ms": int(elapsed * 1000)}
     except Exception as e:
