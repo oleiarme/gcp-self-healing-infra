@@ -35,7 +35,7 @@ If downtime exceeds budget → start post-mortem within 48h.
 
 ### Diagnosis
 ```bash
-PROJECT_ID="idealist-426118"
+PROJECT_ID="<YOUR_PROJECT_ID>"
 REGION="us-central1"
 
 # 1. Check MIG status and current instance
@@ -183,14 +183,14 @@ If you see `no space left on device`:
 ```
 # In terraform/main.tf — disk block:
 disk {
-  source_image = "cos-cloud/cos-stable"
+  source_image = data.google_compute_image.cos.self_link  # pinned COS version
   disk_size_gb = 25   # Free Tier: 25 GB boot + 5 GB data = 30 GB total
   auto_delete  = true
   boot         = true
 }
 ```
 
-**Free Tier:** 25 GB boot + 5 GB data disk = **30 GB total** (within Free Tier limit).
+**Free Tier:** 20 GB boot + 10 GB data disk = **30 GB total** (within Free Tier limit).
 
 Push to GitHub → deploy.yml applies the change.
 
@@ -218,7 +218,7 @@ Use this to update n8n or cloudflared **without recreating the VM** (2-5 seconds
 
 1. Go to **GitHub → Actions → App Deploy (In-Place) → Run workflow**
 2. Fill in the inputs:
-   - **n8n_image**: new image ref (e.g. `docker.n8n.io/n8nio/n8n:1.1.0@sha256:...`). Leave empty to use the current `variables.tf` default.
+   - **n8n_image**: new image ref (e.g. `docker.io/n8nio/n8n:1.1.0@sha256:...`). Leave empty to use the current `variables.tf` default.
    - **cloudflared_image**: leave empty if not updating
    - **skip_mirror**: check only if the image is already in Artifact Registry
 3. Click **Run workflow** and monitor progress
@@ -237,7 +237,7 @@ The in-place deploy changes the **running** container. If the VM is recreated (h
 Update `terraform/variables.tf` to match the running version:
 ```hcl
 variable "n8n_image" {
-  default = "docker.n8n.io/n8nio/n8n:1.1.0@sha256:<new-digest>"
+  default = "docker.io/n8nio/n8n:1.1.0@sha256:<new-digest>"
 }
 
 variable "n8n_image_tag" {
@@ -271,7 +271,7 @@ This triggers `deploy.yml`, which recreates the VM with the new image permanentl
 ### How to Rotate
 
 ```bash
-PROJECT_ID="idealist-426118"
+PROJECT_ID="<YOUR_PROJECT_ID>"
 REGION="us-central1"
 SECRET_NAME="n8n-db-secret"  # or n8n-encryption-key / n8n-cf-token
 NEW_VALUE="your-new-secret-value"
@@ -499,7 +499,7 @@ The optional `google_billing_budget` sends alerts at 50/90/100% of `var.monthly_
 **Check Artifact Registry storage:**
 ```bash
 gcloud artifacts docker images list \
-  us-central1-docker.pkg.dev/idealist-426118/n8n-docker \
+  us-central1-docker.pkg.dev/<YOUR_PROJECT_ID>/n8n-docker \
   --format="table(IMAGE, DIGEST, TAGS, CREATE_TIME, UPDATE_TIME)"
 ```
 
@@ -566,7 +566,7 @@ Incident playbook for the SRE auto-diagnostics Cloud Function (`sre-agent`).
 
 ### Diagnosis
 ```bash
-PROJECT_ID="idealist-426118"
+PROJECT_ID="<YOUR_PROJECT_ID>"
 REGION="us-central1"
 
 # 1. Check Cloud Function status
@@ -621,7 +621,7 @@ See step-by-step procedures in [docs/sre-agent-runbook.md](file:///c:/Users/olei
 
 ```bash
 # Set these once in your shell session:
-export PROJECT_ID="idealist-426118"
+export PROJECT_ID="<YOUR_PROJECT_ID>"
 export REGION="us-central1"
 export ZONE="us-central1-a"
 export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig \

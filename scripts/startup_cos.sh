@@ -222,6 +222,7 @@ DB_USER=${db_user}
 N8N_IMAGE=$N8N_TARGET
 CLOUDFLARED_IMAGE=$CF_TARGET
 DATA_DIR=$DATA_DIR
+N8N_PUBLIC_HOST=${n8n_public_host}
 EOF
 chmod 600 "$COMPOSE_DIR/.env"
 
@@ -285,9 +286,9 @@ services:
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE_HISTORY: 24
       N8N_RUNNERS_ENABLED: "false"
-      N8N_HOST: n8n-gcp.pp.ua
+      N8N_HOST: $${N8N_PUBLIC_HOST}
       N8N_PROTOCOL: https
-      WEBHOOK_URL: https://n8n-gcp.pp.ua/
+      WEBHOOK_URL: https://$${N8N_PUBLIC_HOST}/
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PORT: 5678
       N8N_LISTEN_ADDRESS: 0.0.0.0
@@ -387,7 +388,7 @@ Endpoints:
                    after that delegates to /healthz/deep logic.
   /healthz/deep — All-or-nothing deep check:
                    1. Postgres SELECT 1 completes in < 1s
-                   2. n8n REST /rest/active-workflows responds in < 2s
+                   2. n8n /healthz responds with HTTP 200 in < 2s
                    3. Container cloudflared is in state running (via metrics endpoint)
                    Returns HTTP 200 only when ALL three pass.
                    Returns HTTP 503 with JSON body identifying which check failed.
@@ -413,7 +414,7 @@ POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "n8n")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "n8n")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
-N8N_URL = os.environ.get("N8N_URL", "http://n8n:5678/rest/active-workflows")
+N8N_URL = os.environ.get("N8N_URL", "http://n8n:5678/healthz")
 CLOUDFLARED_METRICS_URL = os.environ.get("CLOUDFLARED_METRICS_URL", "http://cloudflared:2000/ready")
 
 PORT = int(os.environ.get("HEALTHZ_PORT", "8080"))
@@ -467,7 +468,7 @@ def check_postgres() -> dict:
         }
 
 def check_n8n() -> dict:
-    """Check n8n REST /rest/active-workflows responds in < 2s."""
+    """Check n8n /healthz responds with HTTP 200 in < 2s."""
     start = time.time()
     try:
         req = urllib.request.Request(N8N_URL, method="GET")

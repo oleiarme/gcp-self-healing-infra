@@ -6,7 +6,7 @@ Endpoints:
                    after that delegates to /healthz/deep logic.
   /healthz/deep — All-or-nothing deep check:
                    1. Postgres SELECT 1 completes in < 1s
-                   2. n8n REST /rest/active-workflows responds in < 2s
+                   2. n8n /healthz responds with HTTP 200 in < 2s
                    3. Container cloudflared is in state running (via metrics endpoint)
                    Returns HTTP 200 only when ALL three pass.
                    Returns HTTP 503 with JSON body identifying which check failed.
@@ -86,7 +86,7 @@ def check_postgres() -> dict:
         }
 
 def check_n8n() -> dict:
-    """Check n8n REST /rest/active-workflows responds in < 2s."""
+    """Check n8n /healthz responds with HTTP 200 in < 2s."""
     start = time.time()
     try:
         req = urllib.request.Request(N8N_URL, method="GET")

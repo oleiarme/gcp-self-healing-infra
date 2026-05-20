@@ -37,11 +37,11 @@ When the Gemini API key is compromised, or on a scheduled rotation, update the s
 1. Get the new LLM API Key.
 2. Update the secret version:
    ```bash
-   echo -n "NEW_KEY_HERE" | gcloud secrets versions add sre-agent-llm-key --data-file=- --project="idealist-426118"
+   echo -n "NEW_KEY_HERE" | gcloud secrets versions add sre-agent-llm-key --data-file=- --project="<YOUR_PROJECT_ID>"
    ```
 3. Recreate the Cloud Function instances to pick up the updated secret version:
    ```bash
-   gcloud compute instances reset sre-agent --zone=us-central1-a --project="idealist-426118"
+   gcloud compute instances reset sre-agent --zone=us-central1-a --project="<YOUR_PROJECT_ID>"
    ```
    *(Note: The Cloud Function pulls `latest` version on start. Cloud Function instances will naturally recycle, but manually recreating or redeploying guarantees instant pickup.)*
 
@@ -61,7 +61,7 @@ Diagnose the agent if the `sre_agent_health_degraded` alert fires (indicating >5
 ### Action Steps
 1. Run a gcloud command to fetch the logs from the Cloud Function:
    ```bash
-   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="sre-agent" severity>=ERROR' --project="idealist-426118" --limit=50
+   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="sre-agent" severity>=ERROR' --project="<YOUR_PROJECT_ID>" --limit=50
    ```
 2. Check for the following common root causes:
    - **Gemini API Unreachable / Authentication Error**: Check key version and quota.

@@ -103,6 +103,18 @@ locals {
   cf_ar_image      = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}-${local.cf_digest_short}"
 }
 
+# Pin the COS image to a specific version. Using `family` resolves to the
+# latest image at plan time, but the resolved self_link (which includes the
+# image name, e.g. cos-stable-117-18613-150-29) is baked into the instance
+# template. This means a `terraform apply` captures the exact image, and
+# subsequent VM recreations by the MIG reuse that same image until the next
+# `terraform apply` resolves a newer one. This prevents silent OS upgrades
+# between VM recreations.
+data "google_compute_image" "cos" {
+  family  = "cos-stable"
+  project = "cos-cloud"
+}
+
 data "google_iam_workload_identity_pool_provider" "github" {
   count                              = local.wif_enforcement_enabled ? 1 : 0
   project                            = var.project_id
@@ -325,7 +337,7 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 8080
-    request_path = "/"
+    request_path = "/healthz/deep"
   }
 
   check_interval_sec  = 10
@@ -357,7 +369,7 @@ resource "google_compute_instance_template" "tpl" {
 
 
   disk {
-    source_image = "cos-cloud/cos-stable"
+    source_image = data.google_compute_image.cos.self_link
     disk_size_gb = 20
     auto_delete  = true
     boot         = true
@@ -424,6 +436,7 @@ resource "google_compute_instance_template" "tpl" {
       cloudflared_ar_image  = local.cf_ar_image
       ar_location           = var.region
       BACKUP_BUCKET_NAME    = google_storage_bucket.backup.name
+      n8n_public_host       = var.n8n_public_host
     })
   }
 
