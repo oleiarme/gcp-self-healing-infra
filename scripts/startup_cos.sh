@@ -55,6 +55,10 @@ else
   echo "✅ Docker Compose already available: $($COMPOSE_BIN version --short)"
 fi
 
+# COS rootfs is read-only; Docker Compose V2 needs a writable config dir
+export DOCKER_CONFIG="/var/lib/docker/.docker-config"
+mkdir -p "$DOCKER_CONFIG"
+
 # ==========================================
 # 2. Wait for GCP auth (metadata service)
 # ==========================================
@@ -580,7 +584,7 @@ retry timeout 600 docker pull postgres:15-alpine || {
 echo "=== Starting Postgres ==="
 /var/lib/docker/cli-plugins/docker-compose up -d postgres || {
   echo "❌ /var/lib/docker/cli-plugins/docker-compose up postgres failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --tail=50 postgres
+  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
   exit 1
 }
 
@@ -600,14 +604,14 @@ done
 
 if [ "$READY" != "true" ]; then
   echo "❌ Postgres not ready"
-  /var/lib/docker/cli-plugins/docker-compose logs --tail=50 postgres
+  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
   exit 1
 fi
 
 echo "=== Starting Application Containers ==="
 /var/lib/docker/cli-plugins/docker-compose up -d n8n cloudflared healthz-sidecar || {
   echo "❌ /var/lib/docker/cli-plugins/docker-compose up apps failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --tail=100
+  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || docker logs --tail 100 n8n 2>/dev/null || true
   exit 1
 }
 
@@ -643,7 +647,7 @@ if [ "$HEALTHY" = true ]; then
   /var/lib/docker/cli-plugins/docker-compose ps
 else
   echo "❌ CRITICAL: startup failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --tail=100
+  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || true
   exit 1
 fi
 

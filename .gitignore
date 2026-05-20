@@ -13,3 +13,13 @@ terraform.tfvars
 CLAUDE.md
 claude.md
 skills-lock.json
+**/.hypothesis/
+# Python
+__pycache__/
+*.py[cod]
+
+# Pytest
+.pytest_cache/
+
+# Hypothesis
+.hypothesis/

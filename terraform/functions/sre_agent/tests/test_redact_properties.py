@@ -136,6 +136,59 @@ _text_with_multiple_secrets = st.builds(
 )
 
 
+# ─── Redaction placeholder detection ──────────────────────────────────────────
+# After redaction, patterns may still match their own replacement placeholders.
+# For example, "Bearer [REDACTED_TOKEN]" matches the Bearer pattern because
+# [REDACTED_TOKEN] is \S+. This is expected — the secret was removed.
+# We detect this by checking if the matched text contains only known placeholder
+# markers and no actual secret material.
+
+_REDACTION_MARKERS = re.compile(
+    r"\[REDACTED(?:_TOKEN|_JWT|_CREDS|_EMAIL|_IP)?\]"
+)
+
+
+def _contains_only_redacted_content(pattern: re.Pattern[str], match_text: str) -> bool:
+    """Check if a pattern match contains only redaction placeholders, not real secrets.
+
+    The approach: for each pattern, identify the "secret" capture group and verify
+    it consists entirely of known redaction markers.
+    """
+    # Bearer pattern: group(0) is "Bearer <token>" — the token part should be placeholder
+    if "Bearer" in pattern.pattern:
+        # Extract the token part after "Bearer "
+        bearer_match = re.match(r"Bearer\s+(.+)", match_text, re.IGNORECASE)
+        if bearer_match:
+            return bearer_match.group(1) == "[REDACTED_TOKEN]"
+        return False
+
+    # Postgres URL pattern: group(2) is the credentials part
+    if "postgres" in pattern.pattern:
+        pg_match = re.match(
+            r"postgres(?:ql)?://(.+?)@", match_text, re.IGNORECASE
+        )
+        if pg_match:
+            return pg_match.group(1) == "[REDACTED_CREDS]"
+        return False
+
+    # Password pattern: the value part should be [REDACTED]
+    if "password" in pattern.pattern:
+        pw_match = re.match(
+            r'password\s*=\s*"?\[REDACTED\]"?', match_text, re.IGNORECASE
+        )
+        return pw_match is not None
+
+    # Email pattern: the whole match should be the placeholder
+    if "@" in pattern.pattern and "REDACTED_EMAIL" not in pattern.pattern:
+        return match_text == "[REDACTED_EMAIL]"
+
+    # JWT pattern: the whole match should be the placeholder
+    if "eyJ" in pattern.pattern:
+        return match_text == "[REDACTED_JWT]"
+
+    return False
+
+
 # ─── Property 1 Test ──────────────────────────────────────────────────────────
 
 
@@ -143,7 +196,9 @@ _text_with_multiple_secrets = st.builds(
 class TestRedactRemovesAllSecretPatterns:
     """Property 1: Redact removes all secret patterns.
 
-    After redaction, no secret patterns remain in the output.
+    After redaction, no real secret patterns remain in the output.
+    Redaction placeholders (e.g. "Bearer [REDACTED_TOKEN]") are acceptable
+    since they prove the secret was removed.
 
     **Validates: Requirements 5.1**
     """
@@ -153,20 +208,23 @@ class TestRedactRemovesAllSecretPatterns:
     def test_no_secret_pattern_remains_after_redact(self, text: str):
         """**Validates: Requirements 5.1**
 
-        After redact(s), no pattern from SECRET_PATTERNS matches the output.
+        After redact(s), no real secret from SECRET_PATTERNS remains in the output.
         Generates strings containing a single secret pattern embedded in context text.
+        Matches that are known redaction placeholders are excluded (they are the
+        expected output of successful redaction).
         """
         result = redact(text)
 
         for pattern, _replacement in SECRET_PATTERNS:
-            match = pattern.search(result)
-            assert match is None, (
-                f"Secret pattern still present after redaction!\n"
-                f"  Pattern: {pattern.pattern!r}\n"
-                f"  Match:   {match.group()!r}\n"
-                f"  Input:   {text!r}\n"
-                f"  Output:  {result!r}"
-            )
+            for match in pattern.finditer(result):
+                matched_text = match.group()
+                assert _contains_only_redacted_content(pattern, matched_text), (
+                    f"Secret pattern still present after redaction!\n"
+                    f"  Pattern: {pattern.pattern!r}\n"
+                    f"  Match:   {matched_text!r}\n"
+                    f"  Input:   {text!r}\n"
+                    f"  Output:  {result!r}"
+                )
 
     @given(text=_text_with_multiple_secrets)
     @settings(max_examples=200, deadline=None)
@@ -174,18 +232,20 @@ class TestRedactRemovesAllSecretPatterns:
         """**Validates: Requirements 5.1**
 
         Multiple secrets in one string are all removed after redaction.
+        Matches that are known redaction placeholders are excluded.
         """
         result = redact(text)
 
         for pattern, _replacement in SECRET_PATTERNS:
-            match = pattern.search(result)
-            assert match is None, (
-                f"Secret pattern still present after redaction!\n"
-                f"  Pattern: {pattern.pattern!r}\n"
-                f"  Match:   {match.group()!r}\n"
-                f"  Input:   {text!r}\n"
-                f"  Output:  {result!r}"
-            )
+            for match in pattern.finditer(result):
+                matched_text = match.group()
+                assert _contains_only_redacted_content(pattern, matched_text), (
+                    f"Secret pattern still present after redaction!\n"
+                    f"  Pattern: {pattern.pattern!r}\n"
+                    f"  Match:   {matched_text!r}\n"
+                    f"  Input:   {text!r}\n"
+                    f"  Output:  {result!r}"
+                )
 
 
 # ─── Property 8 Test ──────────────────────────────────────────────────────────
