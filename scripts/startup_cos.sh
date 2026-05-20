@@ -422,8 +422,16 @@ START_TIME = time.time()
 
 
 def check_postgres() -> dict:
-    """Check Postgres SELECT 1 completes in < 1s."""
+    """
+    Check Postgres connectivity.
+
+    Important:
+    - MIG health checks should validate availability, not performance SLA.
+    - Temporary latency spikes must NOT mark the VM unhealthy.
+    """
+
     start = time.time()
+
     try:
         conn = psycopg2.connect(
             host=POSTGRES_HOST,
@@ -431,23 +439,32 @@ def check_postgres() -> dict:
             user=POSTGRES_USER,
             password=POSTGRES_PASSWORD,
             dbname=POSTGRES_DB,
-            connect_timeout=1,
+            connect_timeout=3,
         )
+
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.fetchone()
             cur.close()
+
         finally:
             conn.close()
 
         elapsed = time.time() - start
-        if elapsed > 5.0:
-            return {"ok": False, "check": "postgres", "error": f"too slow: {elapsed:.2f}s"}
-        return {"ok": True, "check": "postgres", "latency_ms": int(elapsed * 1000)}
-    except Exception as e:
-        return {"ok": False, "check": "postgres", "error": str(e)}
 
+        return {
+            "ok": True,
+            "check": "postgres",
+            "latency_ms": int(elapsed * 1000),
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "check": "postgres",
+            "error": str(e),
+        }
 
 def check_n8n() -> dict:
     """Check n8n REST /rest/active-workflows responds in < 2s."""
