@@ -332,7 +332,7 @@ services:
     labels:
       container_name: "healthz-sidecar"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     environment:
       N8N_URL: "http://n8n:5678/healthz"
       POSTGRES_HOST: "postgres"
