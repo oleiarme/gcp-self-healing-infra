@@ -14,8 +14,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sre_agent.models import Signal
-from sre_agent.settings import settings
+try:
+    from .models import Signal
+    from .settings import settings
+except ImportError:
+    from models import Signal  # type: ignore[no-redef]
+    from settings import settings  # type: ignore[no-redef]
 
 
 # ─── Secret pattern definitions ───────────────────────────────────────────────

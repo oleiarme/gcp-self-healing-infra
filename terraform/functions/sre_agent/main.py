@@ -12,22 +12,15 @@ Requirements: 1.7, 4.1–4.4, 7.2, 7.3, 9.2–9.7, 10.1–10.3
 
 from __future__ import annotations
 
-# Bootstrap package context for GCP Cloud Functions runtime
 import os
-import shutil
 import sys
-if not __package__ and not os.environ.get("PYTEST_CURRENT_TEST"):
-    _current_dir = os.path.dirname(os.path.abspath(__file__))
-    _target_dir = os.path.join(_current_dir, "sre_agent")
-    if not os.path.exists(_target_dir):
-        os.makedirs(_target_dir, exist_ok=True)
-        with open(os.path.join(_target_dir, "__init__.py"), "w") as f:
-            f.write("")
-        for _file in os.listdir(_current_dir):
-            if _file.endswith(".py") and _file != "main.py":
-                shutil.copy2(os.path.join(_current_dir, _file), os.path.join(_target_dir, _file))
-    if _current_dir not in sys.path:
-        sys.path.insert(0, _current_dir)
+
+# Cloud Functions Gen2 runs main.py as a top-level script.
+# Ensure the source directory is on sys.path so that both
+# `from sre_agent.X import Y` (tests) and `from X import Y` (runtime) work.
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
     __package__ = "sre_agent"
 
 
@@ -38,26 +31,49 @@ import logging
 import threading
 from typing import Any
 
-from .alerts import parse_alert
-from .context import (
-    gather_context,
-    instance_age_seconds_cached,
-    is_live_migration_in_window,
-    truncate_context,
-)
-from .llm import analyze_with_llm
-from .notify import notify_telegram, notify_telegram_brief
-from .redact import redact_signals
-from .rules import rule_based_diagnose
-from .settings import settings
-from .store import (
-    find_or_create_incident_window,
-    is_duplicate,
-    mark_seen,
-    persist_diagnosis,
-    persist_diagnosis_skipped,
-    today_cost_usd,
-)
+try:
+    from .alerts import parse_alert
+    from .context import (
+        gather_context,
+        instance_age_seconds_cached,
+        is_live_migration_in_window,
+        truncate_context,
+    )
+    from .llm import analyze_with_llm
+    from .notify import notify_telegram, notify_telegram_brief
+    from .redact import redact_signals
+    from .rules import rule_based_diagnose
+    from .settings import settings
+    from .store import (
+        find_or_create_incident_window,
+        is_duplicate,
+        mark_seen,
+        persist_diagnosis,
+        persist_diagnosis_skipped,
+        today_cost_usd,
+    )
+except ImportError:
+    # Cloud Functions Gen2 runs main.py as top-level script (no package context)
+    from alerts import parse_alert  # type: ignore[no-redef]
+    from context import (  # type: ignore[no-redef]
+        gather_context,
+        instance_age_seconds_cached,
+        is_live_migration_in_window,
+        truncate_context,
+    )
+    from llm import analyze_with_llm  # type: ignore[no-redef]
+    from notify import notify_telegram, notify_telegram_brief  # type: ignore[no-redef]
+    from redact import redact_signals  # type: ignore[no-redef]
+    from rules import rule_based_diagnose  # type: ignore[no-redef]
+    from settings import settings  # type: ignore[no-redef]
+    from store import (  # type: ignore[no-redef]
+        find_or_create_incident_window,
+        is_duplicate,
+        mark_seen,
+        persist_diagnosis,
+        persist_diagnosis_skipped,
+        today_cost_usd,
+    )
 
 logger = logging.getLogger(__name__)
 

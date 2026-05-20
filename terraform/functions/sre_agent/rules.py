@@ -10,7 +10,10 @@ Requirements: 6.4, 6.5
 
 from datetime import datetime, timezone
 
-from sre_agent.models import Diagnosis, Incident, Signal
+try:
+    from .models import Diagnosis, Incident, Signal
+except ImportError:
+    from models import Diagnosis, Incident, Signal  # type: ignore[no-redef]
 
 
 def rule_based_diagnose(incident: Incident, signals: list[Signal]) -> Diagnosis:

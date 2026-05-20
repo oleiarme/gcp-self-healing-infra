@@ -12,7 +12,10 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from sre_agent.models import Incident
+try:
+    from .models import Incident
+except ImportError:
+    from models import Incident  # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------
@@ -65,16 +68,19 @@ KIND_HANDLERS: dict[str, Callable[[dict], tuple[str, str]]] = {
 def _parse_timestamp(value: str | None) -> datetime:
     """Parse ISO-8601 timestamp string to datetime (UTC).
 
-    Falls back to datetime.now(UTC) if value is None or unparseable.
+    Falls back to Unix epoch (1970-01-01T00:00:00Z) if value is None or
+    unparseable. Using a fixed sentinel ensures determinism (P3): the same
+    payload always produces the same Incident regardless of wall-clock time.
     """
+    _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
     if not value:
-        return datetime.now(timezone.utc)
+        return _EPOCH
     try:
         # Handle 'Z' suffix and standard ISO format
         cleaned = value.replace("Z", "+00:00")
         return datetime.fromisoformat(cleaned)
     except (ValueError, TypeError):
-        return datetime.now(timezone.utc)
+        return _EPOCH
 
 
 def _extract_vm_name(resource_name: str | None) -> str:

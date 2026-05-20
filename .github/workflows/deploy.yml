@@ -2,7 +2,7 @@ name: Deploy n8n Infrastructure
 
 on:
   push:
-    branches: [ main, infra-rewrite-experiment ]
+    branches: [ main, infra-rewrite-experiment, experiment-new ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

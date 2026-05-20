@@ -20,10 +20,16 @@ from typing import TYPE_CHECKING
 
 from google.cloud import firestore
 
-from .settings import settings
+try:
+    from .settings import settings
+except ImportError:
+    from settings import settings  # type: ignore[no-redef]
 
 if TYPE_CHECKING:
-    from .models import Diagnosis, Incident
+    try:
+        from .models import Diagnosis, Incident
+    except ImportError:
+        from models import Diagnosis, Incident  # type: ignore[no-redef]
 
 log = logging.getLogger(__name__)
 
