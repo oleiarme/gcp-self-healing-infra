@@ -44,6 +44,7 @@ docker info >/dev/null 2>&1 || {
 # ==========================================
 echo "=== Installing Docker Compose ==="
 COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
+# shellcheck disable=SC2034
 COMPOSE_VERSION="v2.32.4"
 COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
 if [ ! -x "$COMPOSE_BIN" ]; then
@@ -650,6 +651,245 @@ else
   /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || true
   exit 1
 fi
+
+# ==========================================
+# 12. Setup Automated Backup System (Daily)
+# ==========================================
+echo "=== Setting up automated backups ==="
+
+cat <<'BACKUPSCRIPT' > "/var/lib/docker/compose/n8n/n8n-backup.sh"
+#!/bin/bash
+set -e
+set -o pipefail
+
+BACKUP_BUCKET="${BACKUP_BUCKET_NAME}"
+TEMP_BACKUP_FILE="/tmp/postgres-backup-$(date +%Y%m%dT%H%M%S).sql.gz"
+
+echo "Starting Postgres backup to GCS bucket: $${BACKUP_BUCKET}"
+
+# 1. Fetch metadata access token and project ID
+TOKEN_RESPONSE=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" || echo "")
+ACCESS_TOKEN=$(echo "$${TOKEN_RESPONSE}" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+if [ -z "$${ACCESS_TOKEN}" ]; then
+  echo "❌ Error: Failed to fetch access token from metadata server." >&2
+  exit 1
+fi
+
+PROJECT_ID=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/project-id" || echo "")
+if [ -z "$${PROJECT_ID}" ]; then
+  echo "❌ Error: Failed to fetch project ID from metadata server." >&2
+  exit 1
+fi
+
+# 2. Dump Postgres database
+docker exec postgres pg_dumpall -U "${db_user}" | gzip > "$${TEMP_BACKUP_FILE}"
+
+# 3. Upload to GCS via REST API
+OBJECT_NAME="backup-$(date +%Y%m%dT%H%M%S).sql.gz"
+echo "Uploading $${TEMP_BACKUP_FILE} as $${OBJECT_NAME}..."
+
+UPLOAD_URL="https://storage.googleapis.com/upload/storage/v1/b/$${BACKUP_BUCKET}/o?uploadType=media&name=$${OBJECT_NAME}"
+
+HTTP_CODE=$(curl -s -o /dev/null -w "%%{http_code}" \
+  -X POST \
+  --data-binary @"$${TEMP_BACKUP_FILE}" \
+  -H "Authorization: Bearer $${ACCESS_TOKEN}" \
+  -H "Content-Type: application/gzip" \
+  "$${UPLOAD_URL}")
+
+if [ "$${HTTP_CODE}" -ne 200 ]; then
+  echo "❌ Error: GCS upload failed with HTTP code $${HTTP_CODE}" >&2
+  rm -f "$${TEMP_BACKUP_FILE}"
+  exit 1
+fi
+
+echo "✅ Backup successfully uploaded to gs://$${BACKUP_BUCKET}/$${OBJECT_NAME}"
+rm -f "$${TEMP_BACKUP_FILE}"
+BACKUPSCRIPT
+
+chmod +x "/var/lib/docker/compose/n8n/n8n-backup.sh"
+
+# Write systemd service and timer files for Backups
+cat <<'EOF' > "/etc/systemd/system/n8n-backup.service"
+[Unit]
+Description=n8n Postgres Backup Service
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /var/lib/docker/compose/n8n/n8n-backup.sh
+EOF
+
+cat <<'EOF' > "/etc/systemd/system/n8n-backup.timer"
+[Unit]
+Description=Run n8n Postgres Backup Daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# ==========================================
+# 13. Setup Automated RAM/Swap Monitor (60s)
+# ==========================================
+echo "=== Setting up automated memory monitoring ==="
+
+cat <<'MONITORSCRIPT' > "/var/lib/docker/compose/n8n/n8n-monitor.sh"
+#!/bin/bash
+set -e
+set -o pipefail
+
+# 1. Fetch metadata needed for API
+TOKEN_RESPONSE=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" || echo "")
+ACCESS_TOKEN=$(echo "$${TOKEN_RESPONSE}" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+if [ -z "$${ACCESS_TOKEN}" ]; then
+  echo "❌ Error: Failed to fetch access token." >&2
+  exit 1
+fi
+
+PROJECT_ID=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/project-id" || echo "")
+INSTANCE_ID=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/id" || echo "")
+INSTANCE_NAME=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/name" || echo "")
+ZONE_FULL=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/zone" || echo "")
+ZONE=$(echo "$${ZONE_FULL}" | awk -F/ '{print $$NF}')
+
+if [ -z "$${PROJECT_ID}" ] || [ -z "$${INSTANCE_ID}" ] || [ -z "$${ZONE}" ]; then
+  echo "❌ Error: Failed to fetch VM metadata." >&2
+  exit 1
+fi
+
+# 2. Calculate RAM and Swap utilization from /proc/meminfo
+MEM_TOTAL=$(grep MemTotal /proc/meminfo | awk '{print $$2}')
+MEM_AVAIL=$(grep MemAvailable /proc/meminfo | awk '{print $$2}')
+RAM_UTIL=$(echo | awk "{print (1 - $${MEM_AVAIL}/$${MEM_TOTAL}) * 100}")
+
+SWAP_TOTAL=$(grep SwapTotal /proc/meminfo | awk '{print $$2}')
+SWAP_FREE=$(grep SwapFree /proc/meminfo | awk '{print $$2}')
+if [ "$${SWAP_TOTAL}" -gt 0 ]; then
+  SWAP_UTIL=$(echo | awk "{print (1 - $${SWAP_FREE}/$${SWAP_TOTAL}) * 100}")
+else
+  SWAP_UTIL=0
+fi
+
+TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# 3. Create time series payload
+cat <<EOF > /tmp/monitor-payload.json
+{
+  "timeSeries": [
+    {
+      "metric": {
+        "type": "custom.googleapis.com/vm/memory/ram_utilization",
+        "labels": {
+          "instance_name": "$${INSTANCE_NAME}"
+        }
+      },
+      "resource": {
+        "type": "gce_instance",
+        "labels": {
+          "project_id": "$${PROJECT_ID}",
+          "instance_id": "$${INSTANCE_ID}",
+          "zone": "$${ZONE}"
+        }
+      },
+      "points": [
+        {
+          "interval": {
+            "endTime": "$${TIME}"
+          },
+          "value": {
+            "doubleValue": $${RAM_UTIL}
+          }
+        }
+      ]
+    },
+    {
+      "metric": {
+        "type": "custom.googleapis.com/vm/memory/swap_utilization",
+        "labels": {
+          "instance_name": "$${INSTANCE_NAME}"
+        }
+      },
+      "resource": {
+        "type": "gce_instance",
+        "labels": {
+          "project_id": "$${PROJECT_ID}",
+          "instance_id": "$${INSTANCE_ID}",
+          "zone": "$${ZONE}"
+        }
+      },
+      "points": [
+        {
+          "interval": {
+            "endTime": "$${TIME}"
+          },
+          "value": {
+            "doubleValue": $${SWAP_UTIL}
+          }
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+# 4. Post to Stackdriver Monitoring API
+MONITOR_URL="https://monitoring.googleapis.com/v3/projects/$${PROJECT_ID}/timeSeries"
+HTTP_CODE=$(curl -s -o /dev/null -w "%%{http_code}" \
+  -X POST \
+  -d @/tmp/monitor-payload.json \
+  -H "Authorization: Bearer $${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  "$${MONITOR_URL}")
+
+if [ "$${HTTP_CODE}" -ne 200 ]; then
+  echo "❌ Error: Failed to report metrics, HTTP code $${HTTP_CODE}" >&2
+  cat /tmp/monitor-payload.json
+  rm -f /tmp/monitor-payload.json
+  exit 1
+fi
+
+echo "✅ Metrics reported: RAM=$${RAM_UTIL}%, Swap=$${SWAP_UTIL}%"
+rm -f /tmp/monitor-payload.json
+MONITORSCRIPT
+
+chmod +x "/var/lib/docker/compose/n8n/n8n-monitor.sh"
+
+# Write systemd service and timer files for Monitoring
+cat <<'EOF' > "/etc/systemd/system/n8n-monitor.service"
+[Unit]
+Description=n8n RAM and Swap Monitoring Service
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /var/lib/docker/compose/n8n/n8n-monitor.sh
+EOF
+
+cat <<'EOF' > "/etc/systemd/system/n8n-monitor.timer"
+[Unit]
+Description=Run n8n Memory Monitoring Timer
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+echo "=== Enabling and starting systemd timers ==="
+systemctl daemon-reload
+systemctl enable --now n8n-backup.timer
+systemctl enable --now n8n-monitor.timer
 
 echo "=== ALL DONE ==="
 exit 0

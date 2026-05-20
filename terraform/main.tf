@@ -423,7 +423,7 @@ resource "google_compute_instance_template" "tpl" {
       n8n_ar_image          = local.n8n_ar_image
       cloudflared_ar_image  = local.cf_ar_image
       ar_location           = var.region
-      BACKUP_BUCKET_NAME    = var.backup_bucket_name
+      BACKUP_BUCKET_NAME    = google_storage_bucket.backup.name
     })
   }
 
