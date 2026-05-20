@@ -40,6 +40,22 @@ docker info >/dev/null 2>&1 || {
 }
 
 # ==========================================
+# 1.5 Install Docker Compose V2 plugin (not included in COS by default)
+# ==========================================
+echo "=== Installing Docker Compose plugin ==="
+DOCKER_CONFIG="/root/.docker"
+mkdir -p "$DOCKER_CONFIG/cli-plugins"
+COMPOSE_VERSION="v2.32.4"
+COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+if ! docker compose version >/dev/null 2>&1; then
+  retry curl -fsSL "$COMPOSE_URL" -o "$DOCKER_CONFIG/cli-plugins/docker-compose"
+  chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
+  echo "✅ Docker Compose $(docker compose version --short) installed"
+else
+  echo "✅ Docker Compose already available: $(docker compose version --short)"
+fi
+
+# ==========================================
 # 2. Wait for GCP auth (metadata service)
 # ==========================================
 echo "=== Checking GCP metadata (service account) ==="
