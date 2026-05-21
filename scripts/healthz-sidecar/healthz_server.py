@@ -6,7 +6,7 @@ Endpoints:
                    after that delegates to /healthz/deep logic.
   /healthz/deep — All-or-nothing deep check:
                    1. Postgres SELECT 1 completes in < 1s
-                   2. n8n REST /rest/active-workflows responds in < 2s
+                   2. n8n /healthz responds with HTTP 200 in < 2s
                    3. Container cloudflared is in state running (via metrics endpoint)
                    Returns HTTP 200 only when ALL three pass.
                    Returns HTTP 503 with JSON body identifying which check failed.
@@ -41,8 +41,16 @@ START_TIME = time.time()
 
 
 def check_postgres() -> dict:
-    """Check Postgres SELECT 1 completes in < 1s."""
+    """
+    Check Postgres connectivity.
+
+    Important:
+    - MIG health checks should validate availability, not performance SLA.
+    - Temporary latency spikes must NOT mark the VM unhealthy.
+    """
+
     start = time.time()
+
     try:
         conn = psycopg2.connect(
             host=POSTGRES_HOST,
@@ -50,26 +58,35 @@ def check_postgres() -> dict:
             user=POSTGRES_USER,
             password=POSTGRES_PASSWORD,
             dbname=POSTGRES_DB,
-            connect_timeout=1,
+            connect_timeout=3,
         )
+
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.fetchone()
             cur.close()
+
         finally:
             conn.close()
 
         elapsed = time.time() - start
-        if elapsed > 1.0:
-            return {"ok": False, "check": "postgres", "error": f"too slow: {elapsed:.2f}s"}
-        return {"ok": True, "check": "postgres", "latency_ms": int(elapsed * 1000)}
-    except Exception as e:
-        return {"ok": False, "check": "postgres", "error": str(e)}
 
+        return {
+            "ok": True,
+            "check": "postgres",
+            "latency_ms": int(elapsed * 1000),
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "check": "postgres",
+            "error": str(e),
+        }
 
 def check_n8n() -> dict:
-    """Check n8n REST /rest/active-workflows responds in < 2s."""
+    """Check n8n /healthz responds with HTTP 200 in < 2s."""
     start = time.time()
     try:
         req = urllib.request.Request(N8N_URL, method="GET")

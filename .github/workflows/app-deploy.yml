@@ -116,15 +116,16 @@ jobs:
               set -eo pipefail
               echo '=== In-Place Deploy ==='
 
-              if [ ! -f /home/docker/runtime.env ]; then
-                echo 'Missing /home/docker/runtime.env. Recreate the VM with the current startup_cos.sh first.'
+              COMPOSE_DIR="/var/lib/docker/compose/n8n"
+              ENV_FILE="$COMPOSE_DIR/.env"
+
+              if [ ! -f "$ENV_FILE" ]; then
+                echo "Missing $ENV_FILE. Recreate the VM with the current startup_cos.sh first."
                 exit 1
               fi
-              # shellcheck disable=SC1091
-              . /home/docker/runtime.env
-              # Resolve DB name/user from runtime.env (set by startup_cos.sh from GCP metadata)
-              DB_NAME="${db_name:-n8n}"
-              DB_USER="${db_user:-n8n}"
+
+              # COS rootfs is read-only; Docker Compose V2 needs a writable config dir
+              export DOCKER_CONFIG="/var/lib/docker/.docker-config"
 
               pull_with_fallback() {
                 local name="$1"
@@ -142,42 +143,15 @@ jobs:
               N8N_TARGET=$(pull_with_fallback n8n "$N8N_PRIMARY" "$N8N_FALLBACK")
               CF_TARGET=$(pull_with_fallback cloudflared "$CF_PRIMARY" "$CF_FALLBACK")
 
-              sed -i "s|^N8N_TARGET=.*|N8N_TARGET=${N8N_TARGET}|" /home/docker/runtime.env
-              sed -i "s|^CF_TARGET=.*|CF_TARGET=${CF_TARGET}|" /home/docker/runtime.env
+              # Update image refs in .env (used by docker-compose.yml)
+              sed -i "s|^N8N_IMAGE=.*|N8N_IMAGE=${N8N_TARGET}|" "$ENV_FILE"
+              sed -i "s|^CLOUDFLARED_IMAGE=.*|CLOUDFLARED_IMAGE=${CF_TARGET}|" "$ENV_FILE"
 
-              docker rm -f n8n 2>/dev/null || true
-              docker run -d \
-                --name n8n \
-                --init \
-                --oom-score-adj 200 \
-                --stop-timeout 30 \
-                --network n8n-net \
-                --restart unless-stopped \
-                -p 127.0.0.1:5678:5678 \
-                --memory="900m" \
-                --memory-swap="1500m" \
-                -v /dev/shm/n8n-secrets:/run/secrets:ro \
-                -v /mnt/disks/data/n8n:/home/node/.n8n \
-                -e DB_TYPE=postgresdb \
-                -e DB_POSTGRESDB_HOST=postgres \
-                -e DB_POSTGRESDB_PORT=5432 \
-                -e DB_POSTGRESDB_DATABASE="${db_name}" \
-                -e DB_POSTGRESDB_USER="${db_user}" \
-                -e DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/db_password \
-                -e N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_key \
-                -e N8N_RUNNERS_ENABLED=false \
-                -e N8N_TRUST_PROXY=true \
-                -e N8N_LOG_LEVEL=warn \
-                -e N8N_GRACEFUL_SHUTDOWN_TIMEOUT=25 \
-                -e NODE_OPTIONS="--max-old-space-size=512" \
-                -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
-                -e EXECUTIONS_DATA_PRUNE=true \
-                -e EXECUTIONS_DATA_MAX_AGE=24 \
-                -e N8N_HOST=n8n-gcp.pp.ua \
-                -e N8N_PROTOCOL=https \
-                -e WEBHOOK_URL=https://n8n-gcp.pp.ua/ \
-                "$N8N_TARGET"
+              # Recreate containers with updated images (preserves all env vars from .env)
+              cd "$COMPOSE_DIR"
+              /var/lib/docker/cli-plugins/docker-compose up -d --force-recreate n8n cloudflared
 
+              # Wait for n8n to become healthy
               for i in {1..30}; do
                 if curl -sf http://127.0.0.1:5678/healthz >/dev/null 2>&1; then
                   echo 'n8n is healthy'
@@ -186,18 +160,8 @@ jobs:
                 sleep 2
               done
 
-              docker rm -f cloudflared 2>/dev/null || true
-              docker run -d \
-                --name cloudflared \
-                --network n8n-net \
-                --restart unless-stopped \
-                -p 127.0.0.1:2000:2000 \
-                -v /dev/shm/n8n-secrets/cf_token:/run/secrets/cf_token:ro \
-                "$CF_TARGET" \
-                tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token-file /run/secrets/cf_token
-
               echo '=== Deploy complete ==='
-              docker ps --filter name=n8n --filter name=cloudflared
+              /var/lib/docker/cli-plugins/docker-compose ps
           REMOTE
       # Quick health check after deploy
       - name: Verify deployment

@@ -20,7 +20,8 @@ If downtime exceeds budget → start post-mortem within 48h.
 7. [Backup & DR](#7-backup--dr)
 8. [Billing Budget Alert](#8-billing-budget-alert)
 9. [Escalation & On-Call](#9-escalation--on-call)
-10. [Quick Reference](#10-quick-reference)
+10. [SRE Agent (Auto-Diagnostics)](#10-sre-agent-auto-diagnostics)
+11. [Quick Reference](#11-quick-reference)
 
 ---
 
@@ -34,7 +35,7 @@ If downtime exceeds budget → start post-mortem within 48h.
 
 ### Diagnosis
 ```bash
-PROJECT_ID="idealist-426118"
+PROJECT_ID="<YOUR_PROJECT_ID>"
 REGION="us-central1"
 
 # 1. Check MIG status and current instance
@@ -182,14 +183,14 @@ If you see `no space left on device`:
 ```
 # In terraform/main.tf — disk block:
 disk {
-  source_image = "cos-cloud/cos-stable"
+  source_image = data.google_compute_image.cos.self_link  # pinned COS version
   disk_size_gb = 25   # Free Tier: 25 GB boot + 5 GB data = 30 GB total
   auto_delete  = true
   boot         = true
 }
 ```
 
-**Free Tier:** 25 GB boot + 5 GB data disk = **30 GB total** (within Free Tier limit).
+**Free Tier:** 20 GB boot + 10 GB data disk = **30 GB total** (within Free Tier limit).
 
 Push to GitHub → deploy.yml applies the change.
 
@@ -217,7 +218,7 @@ Use this to update n8n or cloudflared **without recreating the VM** (2-5 seconds
 
 1. Go to **GitHub → Actions → App Deploy (In-Place) → Run workflow**
 2. Fill in the inputs:
-   - **n8n_image**: new image ref (e.g. `docker.n8n.io/n8nio/n8n:1.1.0@sha256:...`). Leave empty to use the current `variables.tf` default.
+   - **n8n_image**: new image ref (e.g. `docker.io/n8nio/n8n:1.1.0@sha256:...`). Leave empty to use the current `variables.tf` default.
    - **cloudflared_image**: leave empty if not updating
    - **skip_mirror**: check only if the image is already in Artifact Registry
 3. Click **Run workflow** and monitor progress
@@ -236,7 +237,7 @@ The in-place deploy changes the **running** container. If the VM is recreated (h
 Update `terraform/variables.tf` to match the running version:
 ```hcl
 variable "n8n_image" {
-  default = "docker.n8n.io/n8nio/n8n:1.1.0@sha256:<new-digest>"
+  default = "docker.io/n8nio/n8n:1.1.0@sha256:<new-digest>"
 }
 
 variable "n8n_image_tag" {
@@ -270,7 +271,7 @@ This triggers `deploy.yml`, which recreates the VM with the new image permanentl
 ### How to Rotate
 
 ```bash
-PROJECT_ID="idealist-426118"
+PROJECT_ID="<YOUR_PROJECT_ID>"
 REGION="us-central1"
 SECRET_NAME="n8n-db-secret"  # or n8n-encryption-key / n8n-cf-token
 NEW_VALUE="your-new-secret-value"
@@ -498,7 +499,7 @@ The optional `google_billing_budget` sends alerts at 50/90/100% of `var.monthly_
 **Check Artifact Registry storage:**
 ```bash
 gcloud artifacts docker images list \
-  us-central1-docker.pkg.dev/idealist-426118/n8n-docker \
+  us-central1-docker.pkg.dev/<YOUR_PROJECT_ID>/n8n-docker \
   --format="table(IMAGE, DIGEST, TAGS, CREATE_TIME, UPDATE_TIME)"
 ```
 
@@ -550,15 +551,77 @@ A post-mortem (using [`docs/postmortems/TEMPLATE.md`](docs/postmortems/TEMPLATE.
 | MIG recreates VM > 3× in one calendar month | FINAL within 7 days |
 | Same root cause recurs within 30 days | FINAL within 7 days; link to prior post-mortem |
 
+## 10. SRE Agent (Auto-Diagnostics)
+
+Incident playbook for the SRE auto-diagnostics Cloud Function (`sre-agent`).
+
+**Architecture context:** The SRE Agent runs as a Cloud Function Gen2 triggered by Pub/Sub message publishing on `sre-incidents`. It queries Cloud Logging/Monitoring, calls the Gemini LLM for diagnosis, and posts reports to Telegram. It uses Firestore (Datastore mode) for idempotency dedup, cross-incident correlation, and cost tracking.
+
 ---
 
-## 10. Quick Reference
+### Symptoms
+- Alert policy `SRE agent health degraded (diagnosis failures)` is triggered in Cloud Monitoring
+- Telegram alerts are missing or silent when Cloud Monitoring alert policies fire
+- Telegram alerts show prefix `[budget exhausted]` or `[llm down: <reason>]`
+
+### Diagnosis
+```bash
+PROJECT_ID="<YOUR_PROJECT_ID>"
+REGION="us-central1"
+
+# 1. Check Cloud Function status
+gcloud functions describe sre-agent \
+  --region=$REGION \
+  --project=$PROJECT_ID \
+  --format="table(name, status, serviceConfig.serviceAccountEmail, eventTrigger.pubsubTopic)"
+
+# 2. View Cloud Function error logs
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="sre-agent" severity>=ERROR' \
+  --project=$PROJECT_ID \
+  --format="table(timestamp, resource.labels.service_name, severity, textPayload, jsonPayload.message)" \
+  --order=desc \
+  --limit=50
+
+# 3. Check for specific LLM call failure events in logs
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="sre-agent" AND (jsonPayload.event="llm_failed" OR jsonPayload.event="diagnosis_failed" OR jsonPayload.event="budget_exhausted")' \
+  --project=$PROJECT_ID \
+  --format="json(timestamp, jsonPayload)" \
+  --order=desc \
+  --limit=10
+```
+
+### Common Causes
+
+| Cause | Signs | Fix |
+|---|---|---|
+| Gemini API key expired / bad | `llm_failed` with `API key not valid` or `400` in logs | Rotate LLM API key. See `docs/sre-agent-runbook.md` §Step 2 |
+| Telegram Bot token or Chat ID wrong | `Telegram API error` or timeouts in logs | Check secrets and environment variables in Terraform config |
+| Firestore permission issues | `google.api_core.exceptions.PermissionDenied` in logs | Verify SRE Agent service account has `roles/datastore.user` role |
+| LLM daily budget exceeded | Telegram message prefixed with `[budget exhausted]` | Wait for daily budget reset or increase `LLM_BUDGET_USD_PER_DAY` in Terraform variables |
+| Kill-switch active | Cloud Function logs show status `disabled` on invocation | Verify if `SRE_AGENT_ENABLED` env variable is set to `false`. Set to `true` to enable. |
+
+### Resolution
+
+See step-by-step procedures in [docs/sre-agent-runbook.md](file:///c:/Users/oleia/Documents/2026/antigravity/gcp-self-healing-infra/docs/sre-agent-runbook.md):
+- **Step 1: Disable SRE Agent (Kill-Switch)**
+- **Step 2: Rotate LLM API Key**
+- **Step 3: Troubleshoot Diagnosis Failures**
+
+### Post-Mortem Trigger
+- If SRE Agent fails to function correctly (e.g. `sre_agent_health_degraded` fires) during a P1 incident.
+- If SRE Agent daily cost exceeds 5.00 USD.
+
+---
+
+## 11. Quick Reference
 
 ### Most Used Commands
 
 ```bash
 # Set these once in your shell session:
-export PROJECT_ID="idealist-426118"
+export PROJECT_ID="<YOUR_PROJECT_ID>"
 export REGION="us-central1"
 export ZONE="us-central1-a"
 export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig \

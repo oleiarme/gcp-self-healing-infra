@@ -64,7 +64,7 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 - **Stateful data**: Postgres data on a persistent disk (`pd-standard`) that **survives VM recreation**
 - **Fast app updates**: In-place deploy via SSH/IAP — update n8n in **5 seconds**, not 15 minutes
 - **Image caching**: Artifact Registry mirrors Docker Hub, bypassing rate limits and accelerating cold starts
-- **100% Free Tier**: e2-micro VM + 30 GB total storage (25 GB boot + 5 GB data) in `us-central1`
+- **100% Free Tier**: e2-micro VM + 30 GB total storage (20 GB boot + 10 GB data) in `us-central1`
 - **Keyless CI/CD**: Workload Identity Federation — no JSON service account keys stored anywhere
 - **Defense in depth**: `tflint` + `tfsec` + `Checkov` + `shellcheck` + `trivy` on every PR
 
@@ -80,7 +80,7 @@ Production-grade self-healing infrastructure on **GCP Free Tier** that automatic
 
 ## How Self-Healing Works
 
-1. **GCP Health Check** polls `http://VM:8080/` every **10s** (timeout 10s). 2 successes → healthy; 7 consecutive failures → unhealthy.
+1. **GCP Health Check** polls `http://VM:8080/healthz` every **10s** (timeout 10s). 2 successes → healthy; 7 consecutive failures → unhealthy.
 2. **Bootstrap grace window**: `initial_delay_sec = 1200s` (20 min) prevents MIG from replacing a VM that is still booting. The health server returns 200 during this window regardless of container state.
 3. **MIG auto-healing**: Once unhealthy status is confirmed, MIG recreates the VM. `replacement_method = RECREATE` ensures the stateful data disk is detached before the new VM claims it.
 4. **Startup sequence** (`startup_cos.sh`, Container-Optimized OS):
@@ -123,7 +123,7 @@ This repo implements the **Shearing Layers** principle: infrastructure changes r
 To update n8n without recreating the VM:
 
 1. Go to **Actions → App Deploy (In-Place) → Run workflow**
-2. Optionally enter a new `n8n_image` ref (e.g. `docker.n8n.io/n8nio/n8n:1.1.0`)
+2. Optionally enter a new `n8n_image` ref (e.g. `docker.io/n8nio/n8n:1.1.0`)
 3. Click **Run workflow**
 
 The workflow will:
@@ -139,7 +139,7 @@ The workflow will:
 | Resource | Limit | Our config |
 |---|---|---|
 | VM | 1× e2-micro in `us-west1`, `us-central1`, or `us-east1` | ✅ e2-micro in `us-central1` |
-| Disk | 30 GB standard persistent disk | ✅ 25 GB boot + 5 GB data = **30 GB** |
+| Disk | 30 GB standard persistent disk | ✅ 20 GB boot + 10 GB data = **30 GB** |
 | Network | 1 GB egress/month to same region | ✅ STANDARD tier, internal traffic |
 | Artifact Registry | 0.5 GB storage | ✅ ~400 MB (2 images) |
 
