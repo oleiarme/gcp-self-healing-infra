@@ -337,7 +337,7 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 8080
-    request_path = "/healthz/deep"
+    request_path = "/healthz"
   }
 
   check_interval_sec  = 10

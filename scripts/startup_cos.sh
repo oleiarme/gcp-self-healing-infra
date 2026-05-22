@@ -189,7 +189,7 @@ fi
 # ==========================================
 echo "=== Resolve AR Images ==="
 N8N_TARGET="${n8n_ar_image}"
-echo "$ACCESS_TOKEN" | docker login -u oauth2token --password-stdin "https://${ar_location}-docker.pkg.dev" >/dev/null 2>&1 || {
+echo "$ACCESS_TOKEN" | docker login -u oauth2token --password-stdin "${ar_location}-docker.pkg.dev" >/dev/null 2>&1 || {
   echo "⚠️ Failed to authenticate docker with Artifact Registry"
 }
 
