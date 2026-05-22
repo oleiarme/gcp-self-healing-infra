@@ -34,6 +34,8 @@ jobs:
       TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '1.123.42' }}
       TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
       TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
+      TF_VAR_postgres_image: ${{ vars.TF_VAR_postgres_image || 'docker.io/library/postgres:15-alpine@sha256:df7bca0066e6f60cc3dd32faa70caddec20e2c22b58932f79498e5704b23854a' }}
+      TF_VAR_postgres_image_tag: ${{ vars.TF_VAR_postgres_image_tag || '15-alpine' }}
       TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
       TF_VAR_region: ${{ vars.TF_VAR_region || 'us-central1' }}
       TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
@@ -98,8 +100,10 @@ jobs:
           # Digest-short prefix (first 8 chars) — mirrors terraform locals
           N8N_DS="${TF_VAR_n8n_image##*@sha256:}"; N8N_DS="${N8N_DS:0:8}"
           CF_DS="${TF_VAR_cloudflared_image##*@sha256:}"; CF_DS="${CF_DS:0:8}"
+          PG_DS="${TF_VAR_postgres_image##*@sha256:}"; PG_DS="${PG_DS:0:8}"
           for PAIR in "${TF_VAR_n8n_image} ${AR}/n8n:${TF_VAR_n8n_image_tag}-${N8N_DS}" \
-                      "${TF_VAR_cloudflared_image} ${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}"; do
+                      "${TF_VAR_cloudflared_image} ${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}" \
+                      "${TF_VAR_postgres_image} ${AR}/postgres:${TF_VAR_postgres_image_tag}-${PG_DS}"; do
             SRC="${PAIR%% *}"
             DST="${PAIR#* }"
             echo ">>> Mirroring ${SRC} → ${DST}"
@@ -122,6 +126,9 @@ jobs:
 
           gcloud artifacts docker images list "${AR}/cloudflared" --include-tags \
             --format="get(TAGS)" | grep "${TF_VAR_cloudflared_image_tag}-${CF_DS}"
+
+          gcloud artifacts docker images list "${AR}/postgres" --include-tags \
+            --format="get(TAGS)" | grep "${TF_VAR_postgres_image_tag}-${PG_DS}"
           echo ">>> Testing docker pull from Artifact Registry..."
 
           for i in {1..5}; do
@@ -132,6 +139,12 @@ jobs:
 
           for i in {1..5}; do
             docker pull "${AR}/cloudflared:${TF_VAR_cloudflared_image_tag}-${CF_DS}" && break
+            echo "Pull retry $i..."
+            sleep 5
+          done
+
+          for i in {1..5}; do
+            docker pull "${AR}/postgres:${TF_VAR_postgres_image_tag}-${PG_DS}" && break
             echo "Pull retry $i..."
             sleep 5
           done

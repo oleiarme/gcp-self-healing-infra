@@ -216,6 +216,13 @@ if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
 fi
 echo "Using cloudflared image: $CF_TARGET"
 
+POSTGRES_TARGET="${postgres_ar_image}"
+if ! retry docker manifest inspect "$POSTGRES_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for postgres → fallback to public"
+  POSTGRES_TARGET="${postgres_image}"
+fi
+echo "Using postgres image: $POSTGRES_TARGET"
+
 SIDECAR_TARGET="${healthz_sidecar_ar_image}"
 
 
@@ -234,6 +241,7 @@ DB_NAME=${db_name}
 DB_USER=${db_user}
 N8N_IMAGE=$N8N_TARGET
 CLOUDFLARED_IMAGE=$CF_TARGET
+POSTGRES_IMAGE=$POSTGRES_TARGET
 HEALTHZ_SIDECAR_IMAGE=$SIDECAR_TARGET
 DATA_DIR=$DATA_DIR
 N8N_PUBLIC_HOST=${n8n_public_host}
@@ -254,7 +262,7 @@ if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
   cat <<'COMPOSEFILE' > "$COMPOSE_DIR/docker-compose.yml"
 services:
   postgres:
-    image: postgres:15-alpine
+    image: $${POSTGRES_IMAGE}
     restart: unless-stopped
     labels:
       container_name: "postgres"
@@ -605,33 +613,56 @@ if __name__ == "__main__":
 EOF
 
 # ==========================================
-# 9. Pull images and start services
+# 9. Pull images in parallel
 # ==========================================
-echo "=== Pulling images ==="
+echo "=== Pulling images in parallel ==="
 cd "$COMPOSE_DIR"
 
-retry timeout 1800 docker pull "$N8N_TARGET" || {
-  echo "❌ Docker pull failed: $N8N_TARGET"
-  exit 1
+# Launch pulls in background redirecting logs
+retry timeout 1800 docker pull "$N8N_TARGET" > /var/log/pull_n8n.log 2>&1 &
+PID_N8N=$!
+
+retry timeout 600 docker pull "$CF_TARGET" > /var/log/pull_cf.log 2>&1 &
+PID_CF=$!
+
+retry timeout 600 docker pull "$POSTGRES_TARGET" > /var/log/pull_postgres.log 2>&1 &
+PID_POSTGRES=$!
+
+# For sidecar, try pull in background; if it fails we will build it.
+# We don't want the script to immediately exit if pull sidecar fails, because we can fallback to building it.
+retry timeout 600 docker pull "$SIDECAR_TARGET" > /var/log/pull_sidecar.log 2>&1 &
+PID_SIDECAR=$!
+
+# Wait for all background pulls to complete and track failures
+FAIL=0
+
+wait $PID_N8N || {
+  echo "❌ Docker pull failed for n8n. Log output:"
+  cat /var/log/pull_n8n.log
+  FAIL=1
 }
 
-retry timeout 600 docker pull "$CF_TARGET" || {
-  echo "❌ Docker pull failed: $CF_TARGET"
-  exit 1
+wait $PID_CF || {
+  echo "❌ Docker pull failed for cloudflared. Log output:"
+  cat /var/log/pull_cf.log
+  FAIL=1
 }
 
-# Pull postgres image
-retry timeout 600 docker pull postgres:15-alpine || {
-  echo "❌ Docker pull failed: postgres:15-alpine"
-  exit 1
+wait $PID_POSTGRES || {
+  echo "❌ Docker pull failed for postgres. Log output:"
+  cat /var/log/pull_postgres.log
+  FAIL=1
 }
 
-# Pull healthz-sidecar from AR, or build it locally if not found
-echo "Using healthz-sidecar image: $SIDECAR_TARGET"
-if ! retry docker pull "$SIDECAR_TARGET"; then
-  echo "⚠️ AR miss for healthz-sidecar → building locally..."
-  docker build -t "$SIDECAR_TARGET" "$COMPOSE_DIR/healthz-sidecar"
+if [ "$FAIL" -ne 0 ]; then
+  echo "❌ One or more critical container pulls failed."
+  exit 1
 fi
+
+wait $PID_SIDECAR || {
+  echo "⚠️ AR miss for healthz-sidecar (or pull failed) → building locally..."
+  docker build -t "$SIDECAR_TARGET" "$COMPOSE_DIR/healthz-sidecar"
+}
 
 # ==========================================
 # 10. Start services in order
