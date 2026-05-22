@@ -7,6 +7,7 @@ name: "Start VM"
 on:
   schedule:
     - cron: '0 6 * * *'  # 06:00 UTC Mon-Sun
+    - cron: '0 7 * * *'  # 07:00 UTC fallback if 06:00 is skipped
   workflow_dispatch: {}
 
 concurrency:
