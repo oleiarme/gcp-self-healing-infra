@@ -40,20 +40,30 @@ docker info >/dev/null 2>&1 || {
 }
 
 # ==========================================
-# 1.5 Install Docker Compose V2 (standalone binary for COS read-only FS)
+# 1.5 Detect or Install Docker Compose V2
 # ==========================================
-echo "=== Installing Docker Compose ==="
-COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
-# shellcheck disable=SC2034
-COMPOSE_VERSION="v2.32.4"
-COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
-if [ ! -x "$COMPOSE_BIN" ]; then
-  mkdir -p /var/lib/docker/cli-plugins
-  retry curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_BIN"
-  chmod +x "$COMPOSE_BIN"
-  echo "✅ Docker Compose $($COMPOSE_BIN version --short) installed"
+echo "=== Detecting Docker Compose ==="
+if docker compose version >/dev/null 2>&1; then
+  echo "✅ Native 'docker compose' is available"
+  COMPOSE_CMD="docker compose"
+elif docker-compose version >/dev/null 2>&1; then
+  echo "✅ Native 'docker-compose' is available"
+  COMPOSE_CMD="docker-compose"
 else
-  echo "✅ Docker Compose already available: $($COMPOSE_BIN version --short)"
+  echo "⏳ No native compose found, falling back to download..."
+  COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
+  # shellcheck disable=SC2034
+  COMPOSE_VERSION="v2.32.4"
+  COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+  if [ ! -x "$COMPOSE_BIN" ]; then
+    mkdir -p /var/lib/docker/cli-plugins
+    retry curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_BIN"
+    chmod +x "$COMPOSE_BIN"
+    echo "✅ Docker Compose $($COMPOSE_BIN version --short) installed"
+  else
+    echo "✅ Docker Compose already available: $($COMPOSE_BIN version --short)"
+  fi
+  COMPOSE_CMD="$COMPOSE_BIN"
 fi
 
 # COS rootfs is read-only; Docker Compose V2 needs a writable config dir
@@ -617,17 +627,17 @@ retry timeout 600 docker pull postgres:15-alpine || {
 # 10. Start services in order
 # ==========================================
 echo "=== Starting Postgres ==="
-/var/lib/docker/cli-plugins/docker-compose up -d postgres || {
-  echo "❌ /var/lib/docker/cli-plugins/docker-compose up postgres failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
+$COMPOSE_CMD up -d postgres || {
+  echo "❌ $COMPOSE_CMD up postgres failed"
+  $COMPOSE_CMD logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
   exit 1
 }
 
 echo "=== Waiting for Postgres ==="
 READY=false
 for i in {1..60}; do
-  if /var/lib/docker/cli-plugins/docker-compose exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
-    if /var/lib/docker/cli-plugins/docker-compose exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+  if $COMPOSE_CMD exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
+    if $COMPOSE_CMD exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
       READY=true
       break
@@ -639,14 +649,14 @@ done
 
 if [ "$READY" != "true" ]; then
   echo "❌ Postgres not ready"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
+  $COMPOSE_CMD logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
   exit 1
 fi
 
 echo "=== Starting Application Containers ==="
-/var/lib/docker/cli-plugins/docker-compose up -d n8n cloudflared healthz-sidecar || {
-  echo "❌ /var/lib/docker/cli-plugins/docker-compose up apps failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || docker logs --tail 100 n8n 2>/dev/null || true
+$COMPOSE_CMD up -d n8n cloudflared healthz-sidecar || {
+  echo "❌ $COMPOSE_CMD up apps failed"
+  $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || docker logs --tail 100 n8n 2>/dev/null || true
   exit 1
 }
 
@@ -679,10 +689,10 @@ done
 
 if [ "$HEALTHY" = true ]; then
   echo "=== COS Startup complete ==="
-  /var/lib/docker/cli-plugins/docker-compose ps
+  $COMPOSE_CMD ps
 else
   echo "❌ CRITICAL: startup failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || true
+  $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || true
   exit 1
 fi
 
