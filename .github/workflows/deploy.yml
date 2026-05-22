@@ -46,6 +46,7 @@ jobs:
       TF_VAR_telegram_thread_id: ${{ vars.TELEGRAM_THREAD_ID }}
       TF_VAR_wif_allowed_repository: ${{ github.repository }}
       TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
+      TF_VAR_healthz_sidecar_tag: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v6
@@ -134,6 +135,33 @@ jobs:
             echo "Pull retry $i..."
             sleep 5
           done
+
+      - name: Build and push healthz-sidecar to Artifact Registry
+        working-directory: .
+        run: |
+          set -euo pipefail
+          AR="${REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}"
+          if ! gcloud artifacts repositories describe "$AR_REPO" \
+               --location="$REGION" --project="$PROJECT" \
+               --format="value(name)" 2>/dev/null; then
+             echo "::notice::AR repo does not exist yet. Skipping sidecar build."
+             exit 0
+          fi
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          
+          TAG_SHA="${{ github.sha }}"
+          TAG_LATEST="latest"
+          
+          echo ">>> Building healthz-sidecar"
+          docker build -t "${AR}/healthz-sidecar:${TAG_SHA}" \
+                       -t "${AR}/healthz-sidecar:${TAG_LATEST}" \
+                       ./scripts/healthz-sidecar
+                       
+          echo ">>> Pushing healthz-sidecar:${TAG_SHA}"
+          docker push "${AR}/healthz-sidecar:${TAG_SHA}"
+          
+          echo ">>> Pushing healthz-sidecar:${TAG_LATEST}"
+          docker push "${AR}/healthz-sidecar:${TAG_LATEST}"
 
       - name: Warn on mirror failure
         if: steps.mirror.outcome == 'failure'

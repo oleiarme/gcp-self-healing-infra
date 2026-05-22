@@ -95,8 +95,7 @@ services:
         max-file: "3"
 
   healthz-sidecar:
-    build:
-      context: ./healthz-sidecar
+    image: ${HEALTHZ_SIDECAR_IMAGE}
     restart: unless-stopped
     labels:
       container_name: "healthz-sidecar"

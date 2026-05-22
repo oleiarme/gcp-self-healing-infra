@@ -301,6 +301,13 @@ variable "cloudflared_image_tag" {
   default     = "2026.3.0"
 }
 
+variable "healthz_sidecar_tag" {
+  description = "Tag/version of the healthz-sidecar image. Defaults to 'latest'."
+  type        = string
+  default     = "latest"
+}
+
+
 variable "db_name" {
   description = "PostgreSQL database name used by n8n (when not using managed Cloud SQL resource name)"
   type        = string

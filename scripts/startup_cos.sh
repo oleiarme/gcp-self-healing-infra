@@ -216,6 +216,9 @@ if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
 fi
 echo "Using cloudflared image: $CF_TARGET"
 
+SIDECAR_TARGET="${healthz_sidecar_ar_image}"
+
+
 # ==========================================
 # 6. Write environment file
 # ==========================================
@@ -231,6 +234,7 @@ DB_NAME=${db_name}
 DB_USER=${db_user}
 N8N_IMAGE=$N8N_TARGET
 CLOUDFLARED_IMAGE=$CF_TARGET
+HEALTHZ_SIDECAR_IMAGE=$SIDECAR_TARGET
 DATA_DIR=$DATA_DIR
 N8N_PUBLIC_HOST=${n8n_public_host}
 EOF
@@ -337,8 +341,7 @@ services:
         max-file: "3"
 
   healthz-sidecar:
-    build:
-      context: ./healthz-sidecar
+    image: $${HEALTHZ_SIDECAR_IMAGE}
     restart: unless-stopped
     labels:
       container_name: "healthz-sidecar"
@@ -622,6 +625,13 @@ retry timeout 600 docker pull postgres:15-alpine || {
   echo "❌ Docker pull failed: postgres:15-alpine"
   exit 1
 }
+
+# Pull healthz-sidecar from AR, or build it locally if not found
+echo "Using healthz-sidecar image: $SIDECAR_TARGET"
+if ! retry docker pull "$SIDECAR_TARGET"; then
+  echo "⚠️ AR miss for healthz-sidecar → building locally..."
+  docker build -t "$SIDECAR_TARGET" "$COMPOSE_DIR/healthz-sidecar"
+fi
 
 # ==========================================
 # 10. Start services in order
