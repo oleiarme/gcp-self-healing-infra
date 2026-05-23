@@ -96,11 +96,14 @@ locals {
   wif_expected_condition  = "assertion.repository == \"${var.wif_allowed_repository}\" && assertion.ref == \"${var.wif_allowed_ref}\""
 
   # Short digest for tagging AR images consistently with CI
-  n8n_digest_short = substr(element(split("@sha256:", var.n8n_image), 1), 0, 8)
-  cf_digest_short  = substr(element(split("@sha256:", var.cloudflared_image), 1), 0, 8)
-  ar_prefix        = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
-  n8n_ar_image     = "${local.ar_prefix}/n8n:${var.n8n_image_tag}-${local.n8n_digest_short}"
-  cf_ar_image      = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}-${local.cf_digest_short}"
+  n8n_digest_short         = substr(element(split("@sha256:", var.n8n_image), 1), 0, 8)
+  cf_digest_short          = substr(element(split("@sha256:", var.cloudflared_image), 1), 0, 8)
+  postgres_digest_short    = substr(element(split("@sha256:", var.postgres_image), 1), 0, 8)
+  ar_prefix                = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+  n8n_ar_image             = "${local.ar_prefix}/n8n:${var.n8n_image_tag}-${local.n8n_digest_short}"
+  cf_ar_image              = "${local.ar_prefix}/cloudflared:${var.cloudflared_image_tag}-${local.cf_digest_short}"
+  postgres_ar_image        = "${local.ar_prefix}/postgres:${var.postgres_image_tag}-${local.postgres_digest_short}"
+  healthz_sidecar_ar_image = "${local.ar_prefix}/healthz-sidecar:${var.healthz_sidecar_tag}"
 }
 
 # Pin the COS image to a specific version. Using `family` resolves to the
@@ -337,7 +340,7 @@ resource "google_compute_health_check" "hc" {
 
   http_health_check {
     port         = 8080
-    request_path = "/healthz/deep"
+    request_path = "/healthz"
   }
 
   check_interval_sec  = 10
@@ -423,20 +426,23 @@ resource "google_compute_instance_template" "tpl" {
     google-logging-enabled    = "true"
     google-monitoring-enabled = "true"
     user-data = templatefile("${path.module}/../scripts/startup_cos.sh", {
-      db_host               = local.effective_db_host
-      db_user               = var.db_user
-      DB_SECRET_NAME        = google_secret_manager_secret.db_password.secret_id
-      N8N_KEY_SECRET_NAME   = google_secret_manager_secret.n8n_key.secret_id
-      CF_TUNNEL_SECRET_NAME = google_secret_manager_secret.cf_token.secret_id
-      db_name               = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : var.db_name
-      db_port               = "5432"
-      n8n_image             = var.n8n_image
-      cloudflared_image     = var.cloudflared_image
-      n8n_ar_image          = local.n8n_ar_image
-      cloudflared_ar_image  = local.cf_ar_image
-      ar_location           = var.region
-      BACKUP_BUCKET_NAME    = google_storage_bucket.backup.name
-      n8n_public_host       = var.n8n_public_host
+      db_host                  = local.effective_db_host
+      db_user                  = var.db_user
+      DB_SECRET_NAME           = google_secret_manager_secret.db_password.secret_id
+      N8N_KEY_SECRET_NAME      = google_secret_manager_secret.n8n_key.secret_id
+      CF_TUNNEL_SECRET_NAME    = google_secret_manager_secret.cf_token.secret_id
+      db_name                  = local.cloud_sql_enabled ? google_sql_database.n8n[0].name : var.db_name
+      db_port                  = "5432"
+      n8n_image                = var.n8n_image
+      cloudflared_image        = var.cloudflared_image
+      postgres_image           = var.postgres_image
+      n8n_ar_image             = local.n8n_ar_image
+      cloudflared_ar_image     = local.cf_ar_image
+      postgres_ar_image        = local.postgres_ar_image
+      ar_location              = var.region
+      BACKUP_BUCKET_NAME       = google_storage_bucket.backup.name
+      n8n_public_host          = var.n8n_public_host
+      healthz_sidecar_ar_image = local.healthz_sidecar_ar_image
     })
   }
 

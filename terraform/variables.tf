@@ -198,6 +198,18 @@ variable "cloudflared_image" {
   default     = "cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0"
 }
 
+variable "postgres_image" {
+  description = "Pinned postgres container image (tag@digest). Managed by Renovate"
+  type        = string
+  default     = "docker.io/library/postgres:15-alpine@sha256:df7bca0066e6f60cc3dd32faa70caddec20e2c22b58932f79498e5704b23854a"
+}
+
+variable "postgres_image_tag" {
+  description = "Tag for the postgres image"
+  type        = string
+  default     = "15-alpine"
+}
+
 # --------------------------------------------------------
 # Workload Identity Federation guardrails (Phase 3)
 # --------------------------------------------------------
@@ -300,6 +312,13 @@ variable "cloudflared_image_tag" {
   type        = string
   default     = "2026.3.0"
 }
+
+variable "healthz_sidecar_tag" {
+  description = "Tag/version of the healthz-sidecar image. Defaults to 'latest'."
+  type        = string
+  default     = "latest"
+}
+
 
 variable "db_name" {
   description = "PostgreSQL database name used by n8n (when not using managed Cloud SQL resource name)"

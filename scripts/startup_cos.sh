@@ -40,20 +40,30 @@ docker info >/dev/null 2>&1 || {
 }
 
 # ==========================================
-# 1.5 Install Docker Compose V2 (standalone binary for COS read-only FS)
+# 1.5 Detect or Install Docker Compose V2
 # ==========================================
-echo "=== Installing Docker Compose ==="
-COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
-# shellcheck disable=SC2034
-COMPOSE_VERSION="v2.32.4"
-COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
-if [ ! -x "$COMPOSE_BIN" ]; then
-  mkdir -p /var/lib/docker/cli-plugins
-  retry curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_BIN"
-  chmod +x "$COMPOSE_BIN"
-  echo "✅ Docker Compose $($COMPOSE_BIN version --short) installed"
+echo "=== Detecting Docker Compose ==="
+if docker compose version >/dev/null 2>&1; then
+  echo "✅ Native 'docker compose' is available"
+  COMPOSE_CMD="docker compose"
+elif docker-compose version >/dev/null 2>&1; then
+  echo "✅ Native 'docker-compose' is available"
+  COMPOSE_CMD="docker-compose"
 else
-  echo "✅ Docker Compose already available: $($COMPOSE_BIN version --short)"
+  echo "⏳ No native compose found, falling back to download..."
+  COMPOSE_BIN="/var/lib/docker/cli-plugins/docker-compose"
+  # shellcheck disable=SC2034
+  COMPOSE_VERSION="v2.32.4"
+  COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+  if [ ! -x "$COMPOSE_BIN" ]; then
+    mkdir -p /var/lib/docker/cli-plugins
+    retry curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_BIN"
+    chmod +x "$COMPOSE_BIN"
+    echo "✅ Docker Compose $($COMPOSE_BIN version --short) installed"
+  else
+    echo "✅ Docker Compose already available: $($COMPOSE_BIN version --short)"
+  fi
+  COMPOSE_CMD="$COMPOSE_BIN"
 fi
 
 # COS rootfs is read-only; Docker Compose V2 needs a writable config dir
@@ -189,8 +199,8 @@ fi
 # ==========================================
 echo "=== Resolve AR Images ==="
 N8N_TARGET="${n8n_ar_image}"
-echo "$ACCESS_TOKEN" | docker login -u oauth2token --password-stdin "https://${ar_location}-docker.pkg.dev" >/dev/null 2>&1 || {
-  echo "⚠️ Failed to authenticate docker with Artifact Registry"
+docker-credential-gcr configure-docker --registries="${ar_location}-docker.pkg.dev" >/dev/null 2>&1 || {
+  echo "⚠️ Failed to configure Docker credential helper for Artifact Registry"
 }
 
 if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
@@ -205,6 +215,16 @@ if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
   CF_TARGET="${cloudflared_image}"
 fi
 echo "Using cloudflared image: $CF_TARGET"
+
+POSTGRES_TARGET="${postgres_ar_image}"
+if ! retry docker manifest inspect "$POSTGRES_TARGET" >/dev/null 2>&1; then
+  echo "⚠️ AR miss for postgres → fallback to public"
+  POSTGRES_TARGET="${postgres_image}"
+fi
+echo "Using postgres image: $POSTGRES_TARGET"
+
+SIDECAR_TARGET="${healthz_sidecar_ar_image}"
+
 
 # ==========================================
 # 6. Write environment file
@@ -221,6 +241,8 @@ DB_NAME=${db_name}
 DB_USER=${db_user}
 N8N_IMAGE=$N8N_TARGET
 CLOUDFLARED_IMAGE=$CF_TARGET
+POSTGRES_IMAGE=$POSTGRES_TARGET
+HEALTHZ_SIDECAR_IMAGE=$SIDECAR_TARGET
 DATA_DIR=$DATA_DIR
 N8N_PUBLIC_HOST=${n8n_public_host}
 EOF
@@ -240,7 +262,7 @@ if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
   cat <<'COMPOSEFILE' > "$COMPOSE_DIR/docker-compose.yml"
 services:
   postgres:
-    image: postgres:15-alpine
+    image: $${POSTGRES_IMAGE}
     restart: unless-stopped
     labels:
       container_name: "postgres"
@@ -327,8 +349,7 @@ services:
         max-file: "3"
 
   healthz-sidecar:
-    build:
-      context: ./healthz-sidecar
+    image: $${HEALTHZ_SIDECAR_IMAGE}
     restart: unless-stopped
     labels:
       container_name: "healthz-sidecar"
@@ -592,42 +613,72 @@ if __name__ == "__main__":
 EOF
 
 # ==========================================
-# 9. Pull images and start services
+# 9. Pull images in parallel
 # ==========================================
-echo "=== Pulling images ==="
+echo "=== Pulling images in parallel ==="
 cd "$COMPOSE_DIR"
 
-retry timeout 1800 docker pull "$N8N_TARGET" || {
-  echo "❌ Docker pull failed: $N8N_TARGET"
-  exit 1
+# Launch pulls in background redirecting logs
+retry timeout 1800 docker pull "$N8N_TARGET" > /var/log/pull_n8n.log 2>&1 &
+PID_N8N=$!
+
+retry timeout 600 docker pull "$CF_TARGET" > /var/log/pull_cf.log 2>&1 &
+PID_CF=$!
+
+retry timeout 600 docker pull "$POSTGRES_TARGET" > /var/log/pull_postgres.log 2>&1 &
+PID_POSTGRES=$!
+
+# For sidecar, try pull in background; if it fails we will build it.
+# We don't want the script to immediately exit if pull sidecar fails, because we can fallback to building it.
+retry timeout 600 docker pull "$SIDECAR_TARGET" > /var/log/pull_sidecar.log 2>&1 &
+PID_SIDECAR=$!
+
+# Wait for all background pulls to complete and track failures
+FAIL=0
+
+wait $PID_N8N || {
+  echo "❌ Docker pull failed for n8n. Log output:"
+  cat /var/log/pull_n8n.log
+  FAIL=1
 }
 
-retry timeout 600 docker pull "$CF_TARGET" || {
-  echo "❌ Docker pull failed: $CF_TARGET"
-  exit 1
+wait $PID_CF || {
+  echo "❌ Docker pull failed for cloudflared. Log output:"
+  cat /var/log/pull_cf.log
+  FAIL=1
 }
 
-# Pull postgres image
-retry timeout 600 docker pull postgres:15-alpine || {
-  echo "❌ Docker pull failed: postgres:15-alpine"
+wait $PID_POSTGRES || {
+  echo "❌ Docker pull failed for postgres. Log output:"
+  cat /var/log/pull_postgres.log
+  FAIL=1
+}
+
+if [ "$FAIL" -ne 0 ]; then
+  echo "❌ One or more critical container pulls failed."
   exit 1
+fi
+
+wait $PID_SIDECAR || {
+  echo "⚠️ AR miss for healthz-sidecar (or pull failed) → building locally..."
+  docker build -t "$SIDECAR_TARGET" "$COMPOSE_DIR/healthz-sidecar"
 }
 
 # ==========================================
 # 10. Start services in order
 # ==========================================
 echo "=== Starting Postgres ==="
-/var/lib/docker/cli-plugins/docker-compose up -d postgres || {
-  echo "❌ /var/lib/docker/cli-plugins/docker-compose up postgres failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
+$COMPOSE_CMD up -d postgres || {
+  echo "❌ $COMPOSE_CMD up postgres failed"
+  $COMPOSE_CMD logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
   exit 1
 }
 
 echo "=== Waiting for Postgres ==="
 READY=false
 for i in {1..60}; do
-  if /var/lib/docker/cli-plugins/docker-compose exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
-    if /var/lib/docker/cli-plugins/docker-compose exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+  if $COMPOSE_CMD exec -T postgres pg_isready -U ${db_user} >/dev/null 2>&1; then
+    if $COMPOSE_CMD exec -T postgres psql -U ${db_user} -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
       echo "✅ Postgres fully ready"
       READY=true
       break
@@ -639,14 +690,14 @@ done
 
 if [ "$READY" != "true" ]; then
   echo "❌ Postgres not ready"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
+  $COMPOSE_CMD logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
   exit 1
 fi
 
 echo "=== Starting Application Containers ==="
-/var/lib/docker/cli-plugins/docker-compose up -d n8n cloudflared healthz-sidecar || {
-  echo "❌ /var/lib/docker/cli-plugins/docker-compose up apps failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || docker logs --tail 100 n8n 2>/dev/null || true
+$COMPOSE_CMD up -d n8n cloudflared healthz-sidecar || {
+  echo "❌ $COMPOSE_CMD up apps failed"
+  $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || docker logs --tail 100 n8n 2>/dev/null || true
   exit 1
 }
 
@@ -679,10 +730,10 @@ done
 
 if [ "$HEALTHY" = true ]; then
   echo "=== COS Startup complete ==="
-  /var/lib/docker/cli-plugins/docker-compose ps
+  $COMPOSE_CMD ps
 else
   echo "❌ CRITICAL: startup failed"
-  /var/lib/docker/cli-plugins/docker-compose logs --no-log-prefix -n 100 2>/dev/null || true
+  $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || true
   exit 1
 fi
 

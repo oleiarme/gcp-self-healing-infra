@@ -64,7 +64,7 @@ jobs:
         with:
           commit-message: "chore(supply-chain): refresh container image digests"
           branch: chore/refresh-image-digests
-          branch-suffix: timestamp
+          # branch-suffix: timestamp
           delete-branch: true
           title: "chore(supply-chain): refresh container image digests"
           body: |
