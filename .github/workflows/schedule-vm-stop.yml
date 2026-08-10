@@ -55,18 +55,36 @@ jobs:
             echo "::error::Failed to get MIG size"
             exit 1
           }
+
           echo "::notice::Current MIG target size: $CURRENT_SIZE"
 
           if [ "$CURRENT_SIZE" = "0" ]; then
             echo "::notice::MIG already at size=0 — skipping resize"
-          else
-            echo "::notice::stop — resizing $MIG_NAME from $CURRENT_SIZE to 0"
-            gcloud compute instance-groups managed resize "$MIG_NAME" \
-              --size=0 \
-              --region="$GCP_REGION" \
-              --project="$GCP_PROJECT" \
-              --quiet || exit 1
+            exit 0
           fi
+
+          echo "::notice::Creating planned-shutdown snooze"
+
+          START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          END_TIME=$(date -u -d "+10 hours" +"%Y-%m-%dT%H:%M:%SZ")
+
+          gcloud monitoring snoozes create \
+            --project="$GCP_PROJECT" \
+            --display-name="n8n planned nightly shutdown" \
+            --criteria-policies="projects/${GCP_PROJECT}/alertPolicies/6459525777497876880,projects/${GCP_PROJECT}/alertPolicies/17954938764292234166" \
+            --start-time="$START_TIME" \
+            --end-time="$END_TIME" \
+            --quiet
+
+          echo "::notice::Snooze created: $START_TIME → $END_TIME"
+
+          echo "::notice::stop — resizing $MIG_NAME from $CURRENT_SIZE to 0"
+
+          gcloud compute instance-groups managed resize "$MIG_NAME" \
+            --size=0 \
+            --region="$GCP_REGION" \
+            --project="$GCP_PROJECT" \
+            --quiet
 
       - name: Send Telegram notification
         if: always() && vars.TELEGRAM_CHAT_ID != ''
