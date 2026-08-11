@@ -71,7 +71,7 @@ jobs:
           gcloud monitoring snoozes create \
             --project="$GCP_PROJECT" \
             --display-name="n8n planned nightly shutdown" \
-            --criteria-policies="projects/${GCP_PROJECT}/alertPolicies/6459525777497876880,projects/${GCP_PROJECT}/alertPolicies/17954938764292234166" \
+            --criteria-policies="projects/${GCP_PROJECT}/alertPolicies/6459525777497876880,projects/${GCP_PROJECT}/alertPolicies/17954938764292234166,projects/${GCP_PROJECT}/alertPolicies/13360363108125221211,projects/${GCP_PROJECT}/alertPolicies/3194136887518143470,projects/${GCP_PROJECT}/alertPolicies/11802836239077404872" \
             --start-time="$START_TIME" \
             --end-time="$END_TIME" \
             --quiet
