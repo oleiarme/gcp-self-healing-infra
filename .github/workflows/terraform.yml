@@ -26,7 +26,7 @@ jobs:
 
       - name: Paths filter
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             terraform:
@@ -52,7 +52,7 @@ jobs:
 
       - name: Cache Terraform plugins
         if: needs.changes.outputs.terraform == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.terraform.d/plugin-cache
           key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}        # -backend=false — no real GCS bucket needed for validation
@@ -257,11 +257,11 @@ jobs:
           fi
 
       - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: terraform-plan
           path: terraform/plan.txt
       - name: Comment plan in PR
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           path: terraform/plan.txt
