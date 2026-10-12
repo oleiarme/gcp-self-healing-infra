@@ -61,10 +61,14 @@ def _make_diagnosis(cost_usd: float = 0.05) -> Diagnosis:
 class TestIsDuplicate:
     """Req 4.1: Deduplication prevents repeated processing within TTL."""
 
+    @patch("sre_agent.store._utcnow")
     @patch("sre_agent.store._get_db")
-    def test_returns_true_when_document_exists_and_not_expired(self, mock_get_db):
+    def test_returns_true_when_document_exists_and_not_expired(self, mock_get_db, mock_utcnow):
         """is_duplicate returns True when incident doc exists within TTL."""
         from sre_agent.store import is_duplicate
+
+        # Set "now" to before the TTL expiry
+        mock_utcnow.return_value = datetime(2026, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
