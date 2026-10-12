@@ -366,7 +366,11 @@ resource "google_compute_instance_template" "tpl" {
     google_secret_manager_secret.n8n_key,
     google_secret_manager_secret.cf_token
   ]
-  name         = "n8n-${substr(md5(timestamp()), 0, 6)}"
+  # name_prefix lets Terraform generate a unique name only when the
+  # template is actually replaced (required by create_before_destroy,
+  # since instance templates are immutable). A timestamp()-based name
+  # forced a new template — and a VM recreation — on every apply.
+  name_prefix  = "n8n-"
   machine_type = "e2-micro"
   tags         = ["n8n"]
 
@@ -419,7 +423,6 @@ resource "google_compute_instance_template" "tpl" {
     # rely on interactive SSH — everything is either a `terraform apply`
     # or a serial-console break-glass. Closes Checkov CKV_GCP_32.
     block-project-ssh-keys = "true"
-    force_update           = timestamp()
 
     # COS metadata: google-logging-enabled, google-monitoring-enabled, user-data
     # Requirements: 8.4, 8.10
