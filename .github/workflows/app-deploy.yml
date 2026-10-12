@@ -39,20 +39,27 @@ jobs:
       REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
       ZONE: ${{ vars.TF_VAR_zone || 'us-central1-a' }}
       AR_REPO: n8n-docker
-      # Resolve image refs: workflow input > GitHub var > workflow default
-      TF_VAR_n8n_image: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:1.123.42@sha256:9c6b47900464be0a00236ca2ee18f74e3a2be410d4fc4368f1b0eee602279cd5' }}
-      TF_VAR_cloudflared_image: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
-      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '1.123.42' }}
-      TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
     steps:
       - uses: actions/checkout@v6
+      # Image refs: workflow input > GitHub var > default in
+      # terraform/variables.tf (see scripts/resolve-image-refs.sh).
+      - name: Resolve image refs
+        env:
+          TF_VAR_n8n_image: ${{ inputs.n8n_image || vars.TF_VAR_n8n_image }}
+          TF_VAR_cloudflared_image: ${{ inputs.cloudflared_image || vars.TF_VAR_cloudflared_image }}
+          TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag }}
+          TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag }}
+        run: |
+          bash scripts/resolve-image-refs.sh \
+            n8n_image n8n_image_tag \
+            cloudflared_image cloudflared_image_tag
       - name: Auth to GCP
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SA }}
       - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
       # Mirror images to AR (same logic as deploy.yml, reused for consistency)
       - name: Mirror images to Artifact Registry
         if: ${{ !inputs.skip_mirror }}
