@@ -29,13 +29,6 @@ jobs:
       PROJECT: ${{ vars.TF_VAR_project_id }}
       REGION: ${{ vars.TF_VAR_region || 'us-central1' }}
       AR_REPO: n8n-docker
-      # Resolve image refs: GitHub var > workflow default (mirrors variables.tf)
-      TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image || 'docker.io/n8nio/n8n:1.123.42@sha256:9c6b47900464be0a00236ca2ee18f74e3a2be410d4fc4368f1b0eee602279cd5' }}
-      TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag || '1.123.42' }}
-      TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image || 'cloudflare/cloudflared:2026.3.0@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0' }}
-      TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag || '2026.3.0' }}
-      TF_VAR_postgres_image: ${{ vars.TF_VAR_postgres_image || 'docker.io/library/postgres:15-alpine@sha256:df7bca0066e6f60cc3dd32faa70caddec20e2c22b58932f79498e5704b23854a' }}
-      TF_VAR_postgres_image_tag: ${{ vars.TF_VAR_postgres_image_tag || '15-alpine' }}
       TF_VAR_project_id: ${{ vars.TF_VAR_project_id }}
       TF_VAR_region: ${{ vars.TF_VAR_region || 'us-central1' }}
       TF_VAR_db_host: ${{ vars.TF_VAR_db_host }}
@@ -69,6 +62,27 @@ jobs:
           fi
           echo "TF_VAR_healthz_sidecar_tag=${SIDECAR_HASH:0:12}" >> "$GITHUB_ENV"
 
+      # Image refs: GitHub var > default in terraform/variables.tf. The
+      # defaults are read from variables.tf (the file digest-refresh.yml
+      # bumps) instead of being copied here: a copy overrode variables.tf
+      # and kept digest bumps from reaching production. Exported via
+      # GITHUB_ENV so the mirror step and terraform plan/apply all see the
+      # same value.
+      - name: Resolve image refs
+        working-directory: .
+        env:
+          TF_VAR_n8n_image: ${{ vars.TF_VAR_n8n_image }}
+          TF_VAR_n8n_image_tag: ${{ vars.TF_VAR_n8n_image_tag }}
+          TF_VAR_cloudflared_image: ${{ vars.TF_VAR_cloudflared_image }}
+          TF_VAR_cloudflared_image_tag: ${{ vars.TF_VAR_cloudflared_image_tag }}
+          TF_VAR_postgres_image: ${{ vars.TF_VAR_postgres_image }}
+          TF_VAR_postgres_image_tag: ${{ vars.TF_VAR_postgres_image_tag }}
+        run: |
+          bash scripts/resolve-image-refs.sh \
+            n8n_image n8n_image_tag \
+            cloudflared_image cloudflared_image_tag \
+            postgres_image postgres_image_tag
+
       - name: Auth to GCP
         uses: google-github-actions/auth@v3
         with:
@@ -96,8 +110,7 @@ jobs:
       # the correct digest-tagged image immediately.  Skips on first deploy
       # when the AR repo doesn't exist yet (VM falls back to public).
       #
-      # Image refs are passed as explicit env vars (no file parsing).
-      # Defaults mirror terraform/variables.tf — update both on version bumps.
+      # Image refs come from the "Resolve image refs" step above.
       - name: Mirror images to Artifact Registry
         id: mirror
         continue-on-error: false

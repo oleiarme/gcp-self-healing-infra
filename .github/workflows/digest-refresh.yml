@@ -62,6 +62,13 @@ jobs:
       - name: Open PR if variables.tf changed
         uses: peter-evans/create-pull-request@v8
         with:
+          # A PR opened with GITHUB_TOKEN does not trigger other workflows,
+          # so the required terraform-validate checks never run on it and
+          # the PR cannot be merged. When the DIGEST_REFRESH_TOKEN secret
+          # (fine-grained PAT: Contents + Pull requests, read and write) is
+          # set, the PR is opened with it and the checks run. Without the
+          # secret the behaviour is unchanged.
+          token: ${{ secrets.DIGEST_REFRESH_TOKEN || secrets.GITHUB_TOKEN }}
           commit-message: "chore(supply-chain): refresh container image digests"
           branch: chore/refresh-image-digests
           # branch-suffix: timestamp

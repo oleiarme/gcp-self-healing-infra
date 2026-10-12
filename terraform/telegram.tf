@@ -147,8 +147,11 @@ resource "google_cloudfunctions_function" "telegram_alert" {
   }
 
   secret_environment_variables {
-    key        = "TELEGRAM_BOT_TOKEN"
-    project_id = var.project_id
+    key = "TELEGRAM_BOT_TOKEN"
+    # Gen1 functions store the project *number* here. Passing the project
+    # ID made Terraform see a diff ("<number>" -> "<id>") and update the
+    # function in place on every apply.
+    project_id = data.google_project.current[0].number
     secret     = google_secret_manager_secret.telegram_bot_token[0].secret_id
     version    = "latest"
   }
