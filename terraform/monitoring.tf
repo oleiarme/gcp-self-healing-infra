@@ -461,11 +461,13 @@ resource "google_monitoring_alert_policy" "uptime_latency_high" {
   }
 
   conditions {
-    display_name = "p95 latency > 2s over 5m"
+    display_name = "p95 latency > 2s over 15m"
 
     condition_monitoring_query_language {
       duration = "0s"
 
+      # One p95 across all checker locations over 15m. Per-location p95 over 5m
+      # had ~5 samples, so it was the max: a single slow probe fired the alert.
       query = <<-MQL
         fetch uptime_url
         | metric 'monitoring.googleapis.com/uptime_check/request_latency'
@@ -473,7 +475,7 @@ resource "google_monitoring_alert_policy" "uptime_latency_high" {
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
             && metric.checker_location != 'apac-singapore'
-        | group_by sliding(5m), [p95: percentile(val(), 95)]
+        | group_by [], sliding(15m), [p95: percentile(val(), 95)]
         | condition p95 > 2000 "ms"
       MQL
 
