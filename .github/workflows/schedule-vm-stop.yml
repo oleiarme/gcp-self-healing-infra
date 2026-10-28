@@ -66,12 +66,14 @@ jobs:
           echo "::notice::Creating planned-shutdown snooze"
 
           START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          END_TIME=$(date -u -d "+10 hours" +"%Y-%m-%dT%H:%M:%SZ")
+          # Upper bound only: schedule-vm-start.yml ends the snooze once n8n is healthy.
+          # Scheduled runs start 1-3 h late, so a fixed 10 h window expired before the VM was back.
+          END_TIME=$(date -u -d "+14 hours" +"%Y-%m-%dT%H:%M:%SZ")
 
           gcloud monitoring snoozes create \
             --project="$GCP_PROJECT" \
             --display-name="n8n planned nightly shutdown" \
-            --criteria-policies="projects/${GCP_PROJECT}/alertPolicies/6459525777497876880,projects/${GCP_PROJECT}/alertPolicies/17954938764292234166,projects/${GCP_PROJECT}/alertPolicies/13360363108125221211,projects/${GCP_PROJECT}/alertPolicies/3194136887518143470,projects/${GCP_PROJECT}/alertPolicies/11802836239077404872" \
+            --criteria-policies="projects/${GCP_PROJECT}/alertPolicies/6459525777497876880,projects/${GCP_PROJECT}/alertPolicies/17954938764292234166,projects/${GCP_PROJECT}/alertPolicies/13360363108125221211,projects/${GCP_PROJECT}/alertPolicies/3194136887518143470,projects/${GCP_PROJECT}/alertPolicies/11802836239077404872,projects/${GCP_PROJECT}/alertPolicies/11422702053421963768,projects/${GCP_PROJECT}/alertPolicies/7743682216430778572" \
             --start-time="$START_TIME" \
             --end-time="$END_TIME" \
             --quiet

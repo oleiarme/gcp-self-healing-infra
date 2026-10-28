@@ -104,6 +104,25 @@ jobs:
             --code 200 \
             --timeout 1800
 
+      - name: End planned-shutdown snooze
+        if: success()
+        run: |
+          END_TIME=$(date -u -d "+10 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+
+          gcloud monitoring snoozes list \
+            --project="$GCP_PROJECT" \
+            --filter="displayName='n8n planned nightly shutdown'" \
+            --format="value(name.basename(),interval.endTime)" |
+          while read -r SNOOZE_ID SNOOZE_END; do
+            if [[ "$SNOOZE_END" > "$END_TIME" ]]; then
+              echo "::notice::Ending snooze $SNOOZE_ID early: $SNOOZE_END → $END_TIME"
+              gcloud monitoring snoozes update "$SNOOZE_ID" \
+                --project="$GCP_PROJECT" \
+                --end-time="$END_TIME" \
+                --quiet
+            fi
+          done
+
       - name: Send Telegram notification
         if: always() && vars.TELEGRAM_CHAT_ID != ''
         uses: ./.github/actions/telegram-notify
