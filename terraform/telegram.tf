@@ -57,9 +57,10 @@ resource "google_pubsub_topic" "alerts" {
   depends_on = [google_project_service.pubsub]
 }
 
-# Cloud Monitoring notification channel (type = pubsub). This is added
-# to local.all_notification_channels in monitoring.tf so every existing
-# alert policy automatically fans out to Telegram.
+# Cloud Monitoring notification channel (type = pubsub). It is added to
+# local.all_notification_channels in monitoring.tf (when
+# var.telegram_monitoring_alerts is true), so every policy that notifies
+# humans also fans out to Telegram.
 resource "google_monitoring_notification_channel" "telegram" {
   count        = local.telegram_enabled ? 1 : 0
   display_name = "n8n Telegram (via Pub/Sub)"

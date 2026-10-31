@@ -104,24 +104,33 @@ jobs:
             --code 200 \
             --timeout 1800
 
-      - name: End planned-shutdown snooze
+      - name: End planned-shutdown snoozes
         if: success()
         run: |
-          END_TIME=$(date -u -d "+10 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+          # Symptom alerts: back on 10 min after n8n is healthy.
+          # Burn-rate alerts: their 1h / 6h windows still hold the night's
+          # failed probes, so they stay snoozed until those windows age out.
+          shorten_snooze() {
+            local name="$1" end_time="$2"
+            gcloud monitoring snoozes list \
+              --project="$GCP_PROJECT" \
+              --filter="displayName='${name}'" \
+              --format="value(name.basename(),interval.endTime)" |
+            while read -r SNOOZE_ID SNOOZE_END; do
+              if [[ "$SNOOZE_END" > "$end_time" ]]; then
+                echo "::notice::Snooze '$name' $SNOOZE_ID: $SNOOZE_END → $end_time"
+                gcloud monitoring snoozes update "$SNOOZE_ID" \
+                  --project="$GCP_PROJECT" \
+                  --end-time="$end_time" \
+                  --quiet
+              fi
+            done
+          }
 
-          gcloud monitoring snoozes list \
-            --project="$GCP_PROJECT" \
-            --filter="displayName='n8n planned nightly shutdown'" \
-            --format="value(name.basename(),interval.endTime)" |
-          while read -r SNOOZE_ID SNOOZE_END; do
-            if [[ "$SNOOZE_END" > "$END_TIME" ]]; then
-              echo "::notice::Ending snooze $SNOOZE_ID early: $SNOOZE_END → $END_TIME"
-              gcloud monitoring snoozes update "$SNOOZE_ID" \
-                --project="$GCP_PROJECT" \
-                --end-time="$END_TIME" \
-                --quiet
-            fi
-          done
+          shorten_snooze "n8n planned nightly shutdown" \
+            "$(date -u -d '+10 minutes' +"%Y-%m-%dT%H:%M:%SZ")"
+          shorten_snooze "n8n planned nightly shutdown (SLO windows)" \
+            "$(date -u -d '+6 hours 10 minutes' +"%Y-%m-%dT%H:%M:%SZ")"
 
       - name: Send Telegram notification
         if: always() && vars.TELEGRAM_CHAT_ID != ''

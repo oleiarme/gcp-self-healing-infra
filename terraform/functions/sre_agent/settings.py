@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # ─── Telegram ─────────────────────────────────────────────────────
     tg_bot_token: str = ""
     tg_chat_id: str = ""
+    # Brief "Подавлено: …" messages for live-migration / bootstrap-grace
+    # suppressions. Off by default: every scheduled morning start produced one.
+    notify_suppressed: bool = False
 
     # ─── Context-gathering ────────────────────────────────────────────
     log_lookback_minutes: int = 5

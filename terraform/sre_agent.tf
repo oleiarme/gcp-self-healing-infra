@@ -256,6 +256,8 @@ resource "google_cloudfunctions2_function" "sre_agent" {
 
       # Telegram
       TG_CHAT_ID = var.telegram_chat_id
+      # Brief "suppressed: bootstrap grace / live migration" messages
+      NOTIFY_SUPPRESSED = tostring(var.sre_notify_suppressed)
 
       # Context-gathering
       LOG_LOOKBACK_MINUTES    = "5"
@@ -394,6 +396,10 @@ resource "google_monitoring_alert_policy" "sre_vm_cpu_high" {
   combiner     = "OR"
   severity     = "WARNING"
 
+  user_labels = {
+    nightly_snooze = "fast"
+  }
+
   conditions {
     display_name = "CPU utilization sustained > 85%"
     condition_threshold {
@@ -462,6 +468,10 @@ resource "google_monitoring_alert_policy" "sre_postgres_fatal" {
   combiner     = "OR"
   severity     = "CRITICAL"
 
+  user_labels = {
+    nightly_snooze = "fast"
+  }
+
   conditions {
     display_name = "postgres_fatal rate > 0 for 60s"
     condition_threshold {
@@ -496,6 +506,10 @@ resource "google_monitoring_alert_policy" "sre_n8n_error_spike" {
   combiner     = "OR"
   severity     = "WARNING"
 
+  user_labels = {
+    nightly_snooze = "fast"
+  }
+
   conditions {
     display_name = "n8n_error rate > 5/min for 60s"
     condition_threshold {
@@ -529,6 +543,10 @@ resource "google_monitoring_alert_policy" "sre_external_unreachable" {
   display_name = "n8n unreachable from internet (deep healthcheck)"
   combiner     = "OR"
   severity     = "CRITICAL"
+
+  user_labels = {
+    nightly_snooze = "fast"
+  }
 
   conditions {
     display_name = "uptime check /healthz/deep failing (<50% probes OK for 3m)"

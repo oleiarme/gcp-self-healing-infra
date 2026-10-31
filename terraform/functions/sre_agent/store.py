@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from google.cloud import firestore
@@ -234,7 +235,10 @@ def _resource_key(incident: "Incident") -> str:
 # ---------------------------------------------------------------------------
 
 
-def find_or_create_incident_window(incident: "Incident") -> tuple[str, bool]:
+def find_or_create_incident_window(
+    incident: "Incident",
+    on_escalation: Callable[[str], None] | None = None,
+) -> tuple[str, bool]:
     """Find or create an incident correlation window.
 
     Queries Firestore collection `incident_windows` for an open window
@@ -253,6 +257,9 @@ def find_or_create_incident_window(incident: "Incident") -> tuple[str, bool]:
 
     Args:
         incident: The normalized Incident to correlate.
+        on_escalation: Optional callback invoked with the window_id when the
+            incoming signal outranks every signal already in the window
+            (severity escalation). Exceptions from it are logged, not raised.
 
     Returns:
         Tuple (window_id, correlated) where correlated=False means new window
@@ -337,9 +344,19 @@ def find_or_create_incident_window(incident: "Incident") -> tuple[str, bool]:
             "incident_ids": firestore.ArrayUnion([incident.id]),
         }
 
+        # Highest priority seen so far in this window: the primary kind is
+        # never rewritten, so without max_priority a second pg_fatal in a
+        # cpu window would count as a fresh escalation again.
+        window_max_priority = max(
+            existing_priority, int(window_data.get("max_priority", 0) or 0)
+        )
+        escalated = incoming_priority > window_max_priority
+
         # Upgrade severity if incoming signal has higher priority
         if incoming_priority > existing_priority:
             update_data["severity"] = incident.severity
+        if escalated:
+            update_data["max_priority"] = incoming_priority
 
         doc_ref = db.collection("incident_windows").document(window_id)
 
@@ -353,11 +370,23 @@ def find_or_create_incident_window(incident: "Incident") -> tuple[str, bool]:
         _update_in_transaction(transaction)
 
         log.info(
-            "event=correlated window_id=%s kind=%s resource=%s",
+            "event=correlated window_id=%s kind=%s resource=%s escalated=%s",
             window_id,
             incident.kind,
             resource,
+            escalated,
         )
+
+        if escalated and on_escalation is not None:
+            try:
+                on_escalation(window_id)
+            except Exception as exc:  # notification must not break correlation
+                log.warning(
+                    "event=escalation_notify_failed window_id=%s error=%s",
+                    window_id,
+                    str(exc),
+                )
+
         return (window_id, True)
 
     except Exception as exc:

@@ -67,3 +67,28 @@ Diagnose the agent if the `sre_agent_health_degraded` alert fires (indicating >5
    - **Gemini API Unreachable / Authentication Error**: Check key version and quota.
    - **Firestore Permission Denied**: Check SRE Agent Service Account IAM bindings.
    - **Telegram Rate Limits / Chat Not Found**: Check chat ID configuration and token.
+
+## Which events reach Telegram
+
+| Agent status | Telegram message |
+|---|---|
+| `ok` | Full diagnosis (🚨 / 🔍 / 🛠) |
+| `correlated` | Nothing, unless the signal outranks the window (`pg_fatal > mem > cpu > external_unreachable > n8n_error`): then one short **⚠️ Severity escalation** note per new top priority |
+| `suppressed:bootstrap_grace`, `suppressed:live_migration` | Nothing by default. Set `sre_notify_suppressed = true` (env `NOTIFY_SUPPRESSED`) to get a brief "Подавлено: …" note |
+| `closed` | Nothing — resolved notifications from Cloud Monitoring are skipped |
+| `duplicate`, `bad_payload`, `disabled` | Nothing |
+
+## Nightly snooze
+
+`schedule-vm-stop.yml` snoozes alert policies by their `nightly_snooze`
+user label (see `terraform/monitoring.tf`), not by hardcoded IDs:
+
+* `fast` — symptom alerts (uptime, latency, MIG replacement, deep healthcheck,
+  CPU, Postgres FATAL, n8n errors). `schedule-vm-start.yml` ends the snooze
+  10 min after n8n is healthy.
+* `slo` — burn-rate alerts. Their 1h / 6h windows still contain the night's
+  failed probes, so the snooze ends 6h10m after n8n is healthy.
+
+`startup_critical`, `log_ingestion_absent`, OOM and the agent health alert are
+never snoozed. To snooze a new policy at night, give it
+`nightly_snooze = "fast"` (or `"slo"`) in `user_labels`.
