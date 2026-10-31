@@ -63,22 +63,52 @@ jobs:
             exit 0
           fi
 
-          echo "::notice::Creating planned-shutdown snooze"
+          # Policies are found by user_labels.nightly_snooze (monitoring.tf),
+          # not by hardcoded IDs that go stale when a policy is recreated.
+          #   fast → "n8n planned nightly shutdown"              (ended at healthy+10m)
+          #   slo  → "n8n planned nightly shutdown (SLO windows)" (ended at healthy+6h)
+          TOKEN=$(gcloud auth print-access-token)
+          POLICIES_JSON=$(curl -sSf -G \
+            -H "Authorization: Bearer $TOKEN" \
+            --data-urlencode "pageSize=200" \
+            "https://monitoring.googleapis.com/v3/projects/${GCP_PROJECT}/alertPolicies") || {
+            echo "::warning::Could not list alert policies — VM will stop without a snooze"
+            POLICIES_JSON='{}'
+          }
+
+          policies_for() {
+            jq -r --arg g "$1" \
+              '[.alertPolicies[]? | select(.userLabels.nightly_snooze == $g) | .name] | join(",")' \
+              <<<"$POLICIES_JSON"
+          }
 
           START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          # Upper bound only: schedule-vm-start.yml ends the snooze once n8n is healthy.
-          # Scheduled runs start 1-3 h late, so a fixed 10 h window expired before the VM was back.
-          END_TIME=$(date -u -d "+14 hours" +"%Y-%m-%dT%H:%M:%SZ")
 
-          gcloud monitoring snoozes create \
-            --project="$GCP_PROJECT" \
-            --display-name="n8n planned nightly shutdown" \
-            --criteria-policies="projects/${GCP_PROJECT}/alertPolicies/6459525777497876880,projects/${GCP_PROJECT}/alertPolicies/17954938764292234166,projects/${GCP_PROJECT}/alertPolicies/13360363108125221211,projects/${GCP_PROJECT}/alertPolicies/3194136887518143470,projects/${GCP_PROJECT}/alertPolicies/11802836239077404872,projects/${GCP_PROJECT}/alertPolicies/11422702053421963768,projects/${GCP_PROJECT}/alertPolicies/7743682216430778572,projects/${GCP_PROJECT}/alertPolicies/8592950810444703923" \
-            --start-time="$START_TIME" \
-            --end-time="$END_TIME" \
-            --quiet
+          create_snooze() {
+            local name="$1" policies="$2" hours="$3"
+            if [ -z "$policies" ]; then
+              echo "::warning::No policies labelled for '$name' (terraform apply pending?) — skipping"
+              return 0
+            fi
+            local end_time
+            end_time=$(date -u -d "+${hours} hours" +"%Y-%m-%dT%H:%M:%SZ")
+            gcloud monitoring snoozes create \
+              --project="$GCP_PROJECT" \
+              --display-name="$name" \
+              --criteria-policies="$policies" \
+              --start-time="$START_TIME" \
+              --end-time="$end_time" \
+              --quiet || {
+              echo "::warning::Failed to create snooze '$name'"
+              return 0
+            }
+            echo "::notice::Snooze '$name': $START_TIME → $end_time ($policies)"
+          }
 
-          echo "::notice::Snooze created: $START_TIME → $END_TIME"
+          # Upper bounds only: schedule-vm-start.yml shortens both once n8n is
+          # healthy. Scheduled runs start 1-3 h late, hence the slack.
+          create_snooze "n8n planned nightly shutdown" "$(policies_for fast)" 14
+          create_snooze "n8n planned nightly shutdown (SLO windows)" "$(policies_for slo)" 20
 
           echo "::notice::stop — resizing $MIG_NAME from $CURRENT_SIZE to 0"
 

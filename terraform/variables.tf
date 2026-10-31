@@ -284,9 +284,21 @@ variable "telegram_thread_id" {
   type        = string
   default     = ""
 }
+
+variable "telegram_monitoring_alerts" {
+  description = "Send Cloud Monitoring alerts (SLO, uptime, startup, MIG, ...) straight to Telegram via the n8n-telegram-alert function. Needs telegram_bot_token. Turn off any email→Telegram forwarding when this is on, or every alert arrives twice."
+  type        = bool
+  default     = true
+}
 # --------------------------------------------------------
 # SRE Agent (Phase 5 — auto-diagnostics)
 # --------------------------------------------------------
+
+variable "sre_notify_suppressed" {
+  description = "Send a brief Telegram message when the SRE agent suppresses an incident (bootstrap grace after VM start, live migration). Off by default: every scheduled morning start produced one."
+  type        = bool
+  default     = false
+}
 
 variable "sre_agent_llm_api_key" {
   description = "API key for the LLM provider used by the SRE agent (stored in Secret Manager as sre-agent-llm-key). Leave empty to disable LLM-based diagnosis (rule-based fallback will be used)."

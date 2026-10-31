@@ -62,8 +62,23 @@ locals {
   all_notification_channels = concat(
     [google_monitoring_notification_channel.email.id],
     google_monitoring_notification_channel.slack[*].id,
+    # Direct Telegram delivery (telegram.tf). Empty unless
+    # var.telegram_bot_token is set and var.telegram_monitoring_alerts is true.
+    var.telegram_monitoring_alerts ? google_monitoring_notification_channel.telegram[*].id : [],
   )
 }
+
+# ------------------------------------------------------------
+# Nightly snooze groups
+# ------------------------------------------------------------
+# schedule-vm-stop.yml looks policies up by user_labels.nightly_snooze
+# instead of hardcoded IDs:
+#   * "fast" — symptom alerts that fire while the VM is off or booting;
+#     snooze ends 10 min after n8n is healthy again.
+#   * "slo"  — burn-rate alerts whose 1h / 6h windows still contain the
+#     night's failed probes; snooze ends 6h after n8n is healthy again.
+# Not snoozed on purpose: startup_critical (a failed morning boot must
+# page), log_ingestion_absent (24h window), OOM, SRE-agent health.
 
 # ------------------------------------------------------------
 # External SLI probe (the canonical SLI source)
@@ -120,9 +135,10 @@ resource "google_monitoring_alert_policy" "slo_fast_burn" {
   severity     = "CRITICAL"
   combiner     = "OR"
   user_labels = {
-    runbook = "gcp-self-healing-infra-runbook-md"
-    slo     = "availability-99-5-28d"
-    window  = "1h"
+    nightly_snooze = "slo"
+    runbook        = "gcp-self-healing-infra-runbook-md"
+    slo            = "availability-99-5-28d"
+    window         = "1h"
   }
 
   conditions {
@@ -165,9 +181,10 @@ resource "google_monitoring_alert_policy" "slo_slow_burn" {
   severity     = "WARNING"
   combiner     = "OR"
   user_labels = {
-    runbook = "gcp-self-healing-infra-runbook-md"
-    slo     = "availability-99-5-28d"
-    window  = "6h"
+    nightly_snooze = "slo"
+    runbook        = "gcp-self-healing-infra-runbook-md"
+    slo            = "availability-99-5-28d"
+    window         = "6h"
   }
 
   conditions {
@@ -346,8 +363,9 @@ resource "google_monitoring_alert_policy" "mig_autohealing" {
   severity     = "WARNING"
   combiner     = "OR"
   user_labels = {
-    runbook = "gcp-self-healing-infra-runbook-md"
-    scope   = "autohealing"
+    nightly_snooze = "fast"
+    runbook        = "gcp-self-healing-infra-runbook-md"
+    scope          = "autohealing"
   }
 
   conditions {
@@ -384,9 +402,10 @@ resource "google_monitoring_alert_policy" "uptime_fail_fast" {
   combiner     = "OR"
 
   user_labels = {
-    runbook = "gcp-self-healing-infra-runbook-md"
-    scope   = "fast-detection"
-    window  = "2m"
+    nightly_snooze = "fast"
+    runbook        = "gcp-self-healing-infra-runbook-md"
+    scope          = "fast-detection"
+    window         = "2m"
   }
 
   conditions {
@@ -432,9 +451,10 @@ resource "google_monitoring_alert_policy" "uptime_error_rate_fast" {
   combiner     = "OR"
 
   user_labels = {
-    runbook = "gcp-self-healing-infra-runbook-md"
-    scope   = "degradation"
-    window  = "5m"
+    nightly_snooze = "fast"
+    runbook        = "gcp-self-healing-infra-runbook-md"
+    scope          = "degradation"
+    window         = "5m"
   }
 
   conditions {
@@ -481,8 +501,9 @@ resource "google_monitoring_alert_policy" "uptime_latency_high" {
   combiner     = "OR"
 
   user_labels = {
-    runbook = "gcp-self-healing-infra-runbook-md"
-    scope   = "latency"
+    nightly_snooze = "fast"
+    runbook        = "gcp-self-healing-infra-runbook-md"
+    scope          = "latency"
   }
 
   conditions {

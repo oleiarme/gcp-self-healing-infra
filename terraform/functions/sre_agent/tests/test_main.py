@@ -674,3 +674,56 @@ class TestLLMNotCalledWhenSuppressed:
             result = sre_agent(_make_cloud_event())
             assert result == "suppressed:bootstrap_grace"
             mock_llm.assert_not_called()
+
+
+class TestSuppressedNotifyToggle:
+    """Brief suppression messages are sent only when NOTIFY_SUPPRESSED=true."""
+
+    def _run(self, notify_suppressed: bool):
+        incident = _make_incident(kind="external_unreachable", severity="critical")
+        with patch("sre_agent.main.settings") as mock_settings, \
+             patch("sre_agent.main.parse_alert", return_value=incident), \
+             patch("sre_agent.main.is_duplicate", return_value=False), \
+             patch("sre_agent.main.mark_seen"), \
+             patch("sre_agent.main.is_live_migration_in_window", return_value=False), \
+             patch("sre_agent.main.instance_age_seconds_cached", return_value=60), \
+             patch("sre_agent.main.persist_diagnosis_skipped") as mock_skip, \
+             patch("sre_agent.main.notify_telegram_brief") as mock_brief:
+            mock_settings.enabled = True
+            mock_settings.bootstrap_grace_seconds = 1800
+            mock_settings.notify_suppressed = notify_suppressed
+            from sre_agent.main import sre_agent
+
+            assert sre_agent(_make_cloud_event()) == "suppressed:bootstrap_grace"
+            mock_skip.assert_called_once()
+            return mock_brief
+
+    def test_silent_by_default(self):
+        self._run(False).assert_not_called()
+
+    def test_brief_sent_when_enabled(self):
+        self._run(True).assert_called_once()
+
+
+class TestEscalationWiring:
+    """main passes an on_escalation callback that sends the escalation note."""
+
+    def test_callback_sends_correlation_update(self):
+        incident = _make_incident(kind="pg_fatal", severity="critical")
+
+        def fake_window(inc, on_escalation=None):
+            on_escalation("window-esc-9")
+            return ("window-esc-9", True)
+
+        with patch("sre_agent.main.settings") as mock_settings, \
+             patch("sre_agent.main.parse_alert", return_value=incident), \
+             patch("sre_agent.main.is_duplicate", return_value=False), \
+             patch("sre_agent.main.mark_seen"), \
+             patch("sre_agent.main.is_live_migration_in_window", return_value=False), \
+             patch("sre_agent.main.find_or_create_incident_window", side_effect=fake_window), \
+             patch("sre_agent.main.notify_telegram_correlation_update") as mock_update:
+            mock_settings.enabled = True
+            from sre_agent.main import sre_agent
+
+            assert sre_agent(_make_cloud_event()) == "correlated"
+            mock_update.assert_called_once_with("window-esc-9", incident)

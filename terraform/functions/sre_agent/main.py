@@ -40,7 +40,11 @@ try:
         truncate_context,
     )
     from .llm import analyze_with_llm
-    from .notify import notify_telegram, notify_telegram_brief
+    from .notify import (
+        notify_telegram,
+        notify_telegram_brief,
+        notify_telegram_correlation_update,
+    )
     from .redact import redact_signals
     from .rules import rule_based_diagnose
     from .settings import settings
@@ -62,7 +66,11 @@ except ImportError:
         truncate_context,
     )
     from llm import analyze_with_llm  # type: ignore[no-redef]
-    from notify import notify_telegram, notify_telegram_brief  # type: ignore[no-redef]
+    from notify import (  # type: ignore[no-redef]
+        notify_telegram,
+        notify_telegram_brief,
+        notify_telegram_correlation_update,
+    )
     from redact import redact_signals  # type: ignore[no-redef]
     from rules import rule_based_diagnose  # type: ignore[no-redef]
     from settings import settings  # type: ignore[no-redef]
@@ -183,7 +191,8 @@ def sre_agent(cloud_event: Any) -> str:
     # ─── Layer 2: Suppression (Req 9.2, 9.3) ─────────────────────────
     # 2a: Live Migration ±300s
     if is_live_migration_in_window(incident):
-        notify_telegram_brief(incident, "live_migration")
+        if settings.notify_suppressed:
+            notify_telegram_brief(incident, "live_migration")
         persist_diagnosis_skipped(incident, "live_migration")
         return "suppressed:live_migration"
 
@@ -192,12 +201,21 @@ def sre_agent(cloud_event: Any) -> str:
     if incident.kind in ("external_unreachable", "n8n_error"):
         vm_age = instance_age_seconds_cached(incident)
         if vm_age is not None and vm_age < settings.bootstrap_grace_seconds:
-            notify_telegram_brief(incident, "bootstrap_grace", vm_age=vm_age)
+            if settings.notify_suppressed:
+                notify_telegram_brief(incident, "bootstrap_grace", vm_age=vm_age)
             persist_diagnosis_skipped(incident, "bootstrap_grace")
             return "suppressed:bootstrap_grace"
 
     # ─── Layer 3: Correlation (Req 9.1) ───────────────────────────────
-    correlation_id, correlated = find_or_create_incident_window(incident)
+    # A correlated signal is not diagnosed again, but if it outranks the
+    # window (e.g. pg_fatal joining a cpu window) Telegram gets a short
+    # severity-escalation note.
+    correlation_id, correlated = find_or_create_incident_window(
+        incident,
+        on_escalation=lambda window_id: notify_telegram_correlation_update(
+            window_id, incident
+        ),
+    )
     if correlated:
         return "correlated"
 

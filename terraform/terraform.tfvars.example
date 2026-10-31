@@ -80,6 +80,13 @@ slack_channel    = "#n8n-ops"
 telegram_bot_token = ""
 telegram_chat_id   = ""
 telegram_thread_id = ""
+# Monitoring alerts straight to Telegram (disable email→Telegram forwarding
+# if you turn this on, or alerts arrive twice)
+telegram_monitoring_alerts = true
+
+# SRE agent: brief Telegram note when an incident is suppressed
+# (bootstrap grace after a VM start, live migration)
+sre_notify_suppressed = false
 
 # --------------------------------------------------------
 # Security / CI

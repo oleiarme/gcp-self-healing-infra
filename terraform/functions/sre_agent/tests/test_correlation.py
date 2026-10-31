@@ -666,3 +666,86 @@ class TestPriorityMatrix:
 
         assert _kind_priority("unknown_kind") == 0
         assert _kind_priority("n8n_error") > _kind_priority("unknown_kind")
+
+
+# --- Tests: severity escalation callback ---
+
+
+class TestEscalationCallback:
+    """on_escalation fires once when a higher-priority signal joins a window."""
+
+    def _setup(self, mock_get_db, mock_utcnow, window_extra: dict | None = None):
+        now = datetime(2026, 6, 15, 10, 1, 0, tzinfo=timezone.utc)
+        mock_utcnow.return_value = now
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        doc = MagicMock()
+        doc.id = "window-esc-001"
+        doc.to_dict.return_value = {
+            "primary_kind": "cpu",
+            "resource_key": "n8n-prod-abc1",
+            "opened_at": now - timedelta(seconds=30),
+            "last_signal_at": now - timedelta(seconds=30),
+            "co_signals": [],
+            "incident_ids": ["inc-cpu-001"],
+            "severity": "warning",
+            **(window_extra or {}),
+        }
+        query = MagicMock()
+        query.stream.return_value = iter([doc])
+        mock_db.collection.return_value.where.return_value.where.return_value.where.return_value = query
+        return now, mock_db
+
+    @patch("sre_agent.store._utcnow")
+    @patch("sre_agent.store._get_db")
+    def test_higher_priority_calls_callback(self, mock_get_db, mock_utcnow):
+        from sre_agent.store import find_or_create_incident_window
+
+        now, _ = self._setup(mock_get_db, mock_utcnow)
+        callback = MagicMock()
+        incident = _make_incident(kind="pg_fatal", severity="critical", started_at=now)
+
+        window_id, correlated = find_or_create_incident_window(incident, on_escalation=callback)
+
+        assert (window_id, correlated) == ("window-esc-001", True)
+        callback.assert_called_once_with("window-esc-001")
+
+    @patch("sre_agent.store._utcnow")
+    @patch("sre_agent.store._get_db")
+    def test_same_or_lower_priority_no_callback(self, mock_get_db, mock_utcnow):
+        from sre_agent.store import find_or_create_incident_window
+
+        now, _ = self._setup(mock_get_db, mock_utcnow)
+        callback = MagicMock()
+        incident = _make_incident(kind="n8n_error", started_at=now)
+
+        find_or_create_incident_window(incident, on_escalation=callback)
+
+        callback.assert_not_called()
+
+    @patch("sre_agent.store._utcnow")
+    @patch("sre_agent.store._get_db")
+    def test_repeat_of_already_escalated_kind_no_callback(self, mock_get_db, mock_utcnow):
+        from sre_agent.store import find_or_create_incident_window
+
+        now, _ = self._setup(mock_get_db, mock_utcnow, {"max_priority": 5})
+        callback = MagicMock()
+        incident = _make_incident(kind="pg_fatal", severity="critical", started_at=now)
+
+        find_or_create_incident_window(incident, on_escalation=callback)
+
+        callback.assert_not_called()
+
+    @patch("sre_agent.store._utcnow")
+    @patch("sre_agent.store._get_db")
+    def test_callback_error_does_not_break_correlation(self, mock_get_db, mock_utcnow):
+        from sre_agent.store import find_or_create_incident_window
+
+        now, _ = self._setup(mock_get_db, mock_utcnow)
+        callback = MagicMock(side_effect=RuntimeError("telegram down"))
+        incident = _make_incident(kind="pg_fatal", severity="critical", started_at=now)
+
+        assert find_or_create_incident_window(incident, on_escalation=callback) == (
+            "window-esc-001",
+            True,
+        )
