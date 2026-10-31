@@ -33,7 +33,7 @@ jobs:
     name: Resolve digests and open PR if changed
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install crane
         # crane is the canonical go-containerregistry CLI for digest lookups.

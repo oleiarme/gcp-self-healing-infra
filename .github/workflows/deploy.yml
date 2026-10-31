@@ -43,7 +43,7 @@ jobs:
       TF_VAR_github_repository_url: ${{ github.server_url }}/${{ github.repository }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Content-based tag: it changes only when scripts/healthz-sidecar
       # changes. A github.sha tag changed on every commit, which altered the

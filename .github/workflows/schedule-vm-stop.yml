@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout actions
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: false

@@ -22,7 +22,7 @@ jobs:
     outputs:
       terraform: ${{ steps.filter.outputs.terraform }}
     steps:
-      - uses: actions/checkout@v6 
+      - uses: actions/checkout@v7 
 
       - name: Paths filter
         id: filter
@@ -41,7 +41,7 @@ jobs:
       run:
         working-directory: ./terraform
     steps:
-      - uses: actions/checkout@v6 
+      - uses: actions/checkout@v7 
       - name: Skip if no terraform changes
         if: needs.changes.outputs.terraform != 'true'
         run: echo "No terraform changes, skipping Terraform steps"
@@ -52,7 +52,7 @@ jobs:
 
       - name: Cache Terraform plugins
         if: needs.changes.outputs.terraform == 'true'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.terraform.d/plugin-cache
           key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}        # -backend=false — no real GCS bucket needed for validation
@@ -76,7 +76,7 @@ jobs:
     name: Shellcheck scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6 
+      - uses: actions/checkout@v7 
 
       - name: Run shellcheck
         # SC2154 suppressed: startup.sh is a Terraform templatefile and the
@@ -90,7 +90,7 @@ jobs:
     name: tflint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6 
+      - uses: actions/checkout@v7 
       - uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: latest
@@ -109,7 +109,7 @@ jobs:
     name: tfsec
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6 
+      - uses: actions/checkout@v7 
       - name: Run tfsec
         # tfsec scans Terraform for security misconfigurations (open ports,
         # plaintext secrets, missing encryption, public buckets, etc.). The
@@ -127,7 +127,7 @@ jobs:
     name: checkov
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6  
+      - uses: actions/checkout@v7  
       - name: Run Checkov
         # Checkov is an additional policy scanner — overlap with tfsec is
         # intentional (defence in depth, different rule sets). Quiet mode
@@ -169,7 +169,7 @@ jobs:
     # owner for quarterly review), set exit-code back to "1". Severity
     # filter stays at HIGH,CRITICAL so the output volume remains usable.
     steps:
-      - uses: actions/checkout@v6 
+      - uses: actions/checkout@v7 
 
       - name: Extract pinned image refs from variables.tf
         id: images
