@@ -109,6 +109,16 @@ def _extract_payload(cloud_event: Any) -> Any:
     return data
 
 
+def _incident_state(incident) -> str:
+    """Return the lower-cased Cloud Monitoring incident state ("open"/"closed"/"")."""
+    raw = incident.raw_payload if isinstance(incident.raw_payload, dict) else {}
+    data = raw.get("incident")
+    if not isinstance(data, dict):
+        return ""
+    state = data.get("state")
+    return state.lower() if isinstance(state, str) else ""
+
+
 def sre_agent(cloud_event: Any) -> str:
     """Entry-point for Cloud Function Gen2 triggered by Pub/Sub.
 
@@ -127,7 +137,7 @@ def sre_agent(cloud_event: Any) -> str:
         cloud_event: CloudEvent from Pub/Sub trigger containing alert payload.
 
     Returns:
-        Status string: "disabled", "bad_payload", "duplicate",
+        Status string: "disabled", "bad_payload", "closed", "duplicate",
         "suppressed:live_migration", "suppressed:bootstrap_grace",
         "correlated", or "ok".
     """
@@ -151,6 +161,18 @@ def sre_agent(cloud_event: Any) -> str:
             "severity": incident.severity,
         },
     )
+
+    # ─── Resolved notifications carry nothing to diagnose ────────────
+    # Cloud Monitoring publishes a second message with state="closed" and
+    # the same incident_id. Incidents open longer than DEDUP_TTL_SECONDS
+    # (e.g. VM down all night) slipped past dedup and were diagnosed and
+    # sent to Telegram as a fresh 🚨 incident after recovery.
+    if _incident_state(incident) == "closed":
+        logger.info(
+            "Incident closed, skipping",
+            extra={"event": "closed_skipped", "incident_id": incident.id},
+        )
+        return "closed"
 
     # ─── Layer 1: Idempotency dedup (Req 4.1) ────────────────────────
     if is_duplicate(incident.id):

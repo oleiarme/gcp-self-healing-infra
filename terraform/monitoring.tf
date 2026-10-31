@@ -73,8 +73,10 @@ resource "google_monitoring_uptime_check_config" "n8n" {
   display_name = "n8n /healthz (public)"
   timeout      = "10s"
   period       = "60s"
-  # Probed from every available region. A window is counted as a failure
-  # only when all six probe locations fail (see burn-rate MQL below).
+  # Probed from every available region. Alert queries below aggregate all
+  # checker locations into one series (`group_by []`), so a single flaky
+  # region lowers the good-fraction proportionally instead of opening its
+  # own incident.
   selected_regions = []
 
   http_check {
@@ -139,7 +141,7 @@ resource "google_monitoring_alert_policy" "slo_fast_burn" {
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | group_by sliding(1h), [fraction: fraction_true(val())]
+        | group_by [], sliding(1h), [fraction: fraction_true(val())]
         | condition fraction < 0.928
       MQL
       trigger {
@@ -180,7 +182,7 @@ resource "google_monitoring_alert_policy" "slo_slow_burn" {
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | group_by sliding(6h), [fraction: fraction_true(val())]
+        | group_by [], sliding(6h), [fraction: fraction_true(val())]
         | condition fraction < 0.97
       MQL
       trigger {
@@ -381,19 +383,29 @@ resource "google_monitoring_alert_policy" "uptime_fail_fast" {
   severity     = "CRITICAL"
   combiner     = "OR"
 
+  user_labels = {
+    runbook = "gcp-self-healing-infra-runbook-md"
+    scope   = "fast-detection"
+    window  = "2m"
+  }
+
   conditions {
-    display_name = "uptime check failed"
+    display_name = "majority of probe locations failing for 2m"
     condition_threshold {
-      filter = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" resource.type=\"uptime_url\""
+      # Scoped to the public /healthz check. Without check_id the filter also
+      # matched /healthz/deep, and without a cross-series reducer each checker
+      # location was its own series — one failed probe in one region paged.
+      filter = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" resource.type=\"uptime_url\" metric.labels.check_id=\"${google_monitoring_uptime_check_config.n8n.uptime_check_id}\""
 
       comparison      = "COMPARISON_LT"
-      threshold_value = 1
+      threshold_value = 0.5
 
-      duration = "60s" # 🔥 ключ
+      duration = "120s"
 
       aggregations {
-        alignment_period   = "60s"
-        per_series_aligner = "ALIGN_FRACTION_TRUE"
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_FRACTION_TRUE"
+        cross_series_reducer = "REDUCE_MEAN"
       }
 
       trigger {
@@ -403,21 +415,34 @@ resource "google_monitoring_alert_policy" "uptime_fail_fast" {
   }
 
   notification_channels = local.all_notification_channels
+
+  alert_strategy {
+    auto_close = "1800s"
+  }
+
+  documentation {
+    content   = "More than half of the uptime probe locations have failed /healthz for 2 minutes — n8n is most likely down for real users. ${local.runbook_url_md} §1."
+    mime_type = "text/markdown"
+  }
 }
 
 resource "google_monitoring_alert_policy" "uptime_error_rate_fast" {
-  display_name = "n8n uptime error-rate (fast 2m)"
-  severity     = "CRITICAL"
+  display_name = "n8n uptime error-rate (degraded, 5m)"
+  severity     = "WARNING"
   combiner     = "OR"
 
   user_labels = {
     runbook = "gcp-self-healing-infra-runbook-md"
-    scope   = "fast-detection"
-    window  = "2m"
+    scope   = "degradation"
+    window  = "5m"
   }
 
   conditions {
-    display_name = "success rate < 1.0 over sliding 2m"
+    # Previously `success < 1` per checker location over 2m: any single
+    # failed probe from any region opened a CRITICAL incident. Now one
+    # success rate across all locations; outright outages are covered by
+    # uptime_fail_fast, this catches partial / regional degradation.
+    display_name = "success rate < 80% across locations over sliding 5m"
 
     condition_monitoring_query_language {
       duration = "0s"
@@ -428,8 +453,8 @@ resource "google_monitoring_alert_policy" "uptime_error_rate_fast" {
         | filter
             (resource.host == '${var.n8n_public_host}')
             && metric.check_id == '${google_monitoring_uptime_check_config.n8n.uptime_check_id}'
-        | group_by sliding(2m), [success: fraction_true(val())]
-        | condition success < 1
+        | group_by [], sliding(5m), [success: fraction_true(val())]
+        | condition success < 0.8
       MQL
 
       trigger {
@@ -445,7 +470,7 @@ resource "google_monitoring_alert_policy" "uptime_error_rate_fast" {
   }
 
   documentation {
-    content   = "Fast detection: uptime success dropped below 100% over 2 minutes. Likely early degradation before SLO burn. ${local.runbook_url_md} §1."
+    content   = "Degradation: fewer than 80% of uptime probes (all locations combined) passed over 5 minutes. Likely partial or regional failure before SLO burn. ${local.runbook_url_md} §1."
     mime_type = "text/markdown"
   }
 }

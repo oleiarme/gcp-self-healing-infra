@@ -145,6 +145,53 @@ class TestStructuredLog:
             assert invocation_logged, f"Expected event=invocation log, got: {calls}"
 
 
+class TestClosedState:
+    """state="closed" notifications are skipped before dedup, LLM and Telegram."""
+
+    def _closed_incident(self, state: str = "closed") -> Incident:
+        incident = _make_incident(kind="external_unreachable", severity="critical")
+        incident.raw_payload = {"incident": {"incident_id": incident.id, "state": state}}
+        return incident
+
+    def test_closed_returns_closed_without_side_effects(self):
+        incident = self._closed_incident()
+        with patch("sre_agent.main.settings") as mock_settings, \
+             patch("sre_agent.main.parse_alert", return_value=incident), \
+             patch("sre_agent.main.is_duplicate", return_value=False) as mock_dup, \
+             patch("sre_agent.main.mark_seen") as mock_mark, \
+             patch("sre_agent.main.notify_telegram") as mock_notify, \
+             patch("sre_agent.main.notify_telegram_brief") as mock_brief, \
+             patch("sre_agent.main.analyze_with_llm") as mock_llm:
+            mock_settings.enabled = True
+            from sre_agent.main import sre_agent
+
+            assert sre_agent(_make_cloud_event()) == "closed"
+            mock_dup.assert_not_called()
+            mock_mark.assert_not_called()
+            mock_notify.assert_not_called()
+            mock_brief.assert_not_called()
+            mock_llm.assert_not_called()
+
+    def test_closed_state_case_insensitive(self):
+        incident = self._closed_incident(state="CLOSED")
+        with patch("sre_agent.main.settings") as mock_settings, \
+             patch("sre_agent.main.parse_alert", return_value=incident):
+            mock_settings.enabled = True
+            from sre_agent.main import sre_agent
+
+            assert sre_agent(_make_cloud_event()) == "closed"
+
+    def test_open_state_continues_to_dedup(self):
+        incident = self._closed_incident(state="open")
+        with patch("sre_agent.main.settings") as mock_settings, \
+             patch("sre_agent.main.parse_alert", return_value=incident), \
+             patch("sre_agent.main.is_duplicate", return_value=True):
+            mock_settings.enabled = True
+            from sre_agent.main import sre_agent
+
+            assert sre_agent(_make_cloud_event()) == "duplicate"
+
+
 class TestDedup:
     """Requirement 4.1: Deduplication returns 'duplicate' for already-seen incidents."""
 
