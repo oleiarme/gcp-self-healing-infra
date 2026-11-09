@@ -201,7 +201,7 @@ variable "cloudflared_image" {
 variable "postgres_image" {
   description = "Pinned postgres container image (tag@digest). Managed by Renovate"
   type        = string
-  default     = "docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81"
+  default     = "docker.io/library/postgres:15-alpine@sha256:aae6554de426ae1990f1a939ff183a0299146cf7142a6f4c379c3357af9cc2d8"
 }
 
 variable "postgres_image_tag" {
