@@ -364,7 +364,7 @@ A Cloud Function (`n8n-telegram-alert`) is triggered by Pub/Sub on deploy events
 │       ├── terraform.yml               # PR validation (fmt/validate/lint/scan)
 │       ├── digest-refresh.yml          # Weekly image digest auto-update
 │       ├── schedule-vm-start.yml       # Morning VM start (cost optimization)
-│       └── schedule-vm-stop.yml        # Night VM stop (22:00 UTC daily)
+│       └── schedule-vm-stop.yml        # Night VM stop (19:00 Europe/Lisbon daily)
 ├── scripts/
 │   ├── startup_cos.sh                  # VM bootstrap on COS (disk mount, Docker, n8n)
 │   └── startup.sh                      # Legacy Debian bootstrap (for reference)
@@ -422,7 +422,7 @@ After `terraform apply`:
 
 ## VM Schedule
 
-To reduce Free Tier egress and IP costs when n8n is not actively used, the VM is stopped every night at **22:00 UTC** and started every morning at **07:00 UTC** (Mon–Fri) via scheduled GitHub Actions workflows.
+To reduce Free Tier egress and IP costs when n8n is not actively used, the VM is stopped every night at **19:00 Europe/Lisbon** and started every morning at **09:00 Europe/Lisbon** (daily; both workflows run hourly and a gate job checks Lisbon time, because GitHub starts scheduled runs hours late) via scheduled GitHub Actions workflows.
 
 Disable by setting the GitHub variable 
 `VM_SCHEDULE_ENABLED=false`.
