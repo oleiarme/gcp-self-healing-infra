@@ -7,7 +7,7 @@ name: "Stop VM"
 on:
   schedule:
     # Hourly; the gate job only lets runs through 19:00-08:59 Europe/Lisbon.
-    - cron: '37 * * * *'
+    - cron: '5 * * * *'   # :05, not :00 (GitHub's busiest minute)
   workflow_dispatch: {}
 
 concurrency:

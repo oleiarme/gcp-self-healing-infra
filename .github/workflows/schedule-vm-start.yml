@@ -7,7 +7,7 @@ name: "Start VM"
 on:
   schedule:
     # Hourly; the gate job only lets runs through 09:00-18:59 Europe/Lisbon.
-    - cron: '7 * * * *'
+    - cron: '3 * * * *'   # :03, not :00 (GitHub's busiest minute)
   workflow_dispatch: {}
 
 concurrency:
