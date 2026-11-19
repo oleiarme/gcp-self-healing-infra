@@ -6,8 +6,8 @@ name: "Start VM"
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # 06:00 UTC Mon-Sun
-    - cron: '0 7 * * *'  # 07:00 UTC fallback if 06:00 is skipped
+    # Hourly; the gate job only lets runs through 09:00-18:59 Europe/Lisbon.
+    - cron: '3 * * * *'   # :03, not :00 (GitHub's busiest minute)
   workflow_dispatch: {}
 
 concurrency:
@@ -15,12 +15,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    # GitHub runs scheduled workflows hours late, so this workflow is
+    # triggered hourly and decides by the actual Europe/Lisbon time at run
+    # time (handles winter/summer time). Start window: 09:00-18:59.
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          HOUR=$(TZ=Europe/Lisbon date +%-H)
+          RUN=false
+          if [ "$EVENT" != "schedule" ]; then
+            RUN=true
+          elif [ "$HOUR" -ge 9 ] && [ "$HOUR" -lt 19 ]; then
+            RUN=true
+          fi
+          echo "::notice::Lisbon time $(TZ=Europe/Lisbon date +%H:%M) -> run=$RUN"
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
   start:
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 65
     if: >-
+      needs.gate.outputs.run == 'true' && (
       github.event_name == 'workflow_dispatch' ||
-      vars.VM_SCHEDULE_ENABLED != 'false'
+      vars.VM_SCHEDULE_ENABLED != 'false')
 
     permissions:
       contents: read
@@ -51,6 +75,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Resize MIG to 1
+        id: resize
         run: |
           CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
             --region="$GCP_REGION" \
@@ -63,6 +88,8 @@ jobs:
 
           if [ "$CURRENT_SIZE" = "1" ]; then
             echo "::notice::MIG already at size=1 — skipping resize"
+            # Hourly runs: nothing else to do (no health wait, no Telegram).
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::start — resizing $MIG_NAME from $CURRENT_SIZE to 1"
             gcloud compute instance-groups managed resize "$MIG_NAME" \
@@ -73,6 +100,7 @@ jobs:
           fi
 
       - name: Wait for VM to become healthy
+        if: steps.resize.outputs.changed != 'false'
         run: |
           bash .github/scripts/wait-gcp-mig.sh \
             --name "$MIG_NAME" \
@@ -97,7 +125,7 @@ jobs:
             --project="$GCP_PROJECT"
 
       - name: Health check (n8n /healthz)
-        if: env.N8N_HOST != ''
+        if: env.N8N_HOST != '' && steps.resize.outputs.changed != 'false'
         run: |
           bash .github/scripts/wait-url.sh \
             --url "https://$N8N_HOST/healthz" \
@@ -105,7 +133,7 @@ jobs:
             --timeout 1800
 
       - name: End planned-shutdown snoozes
-        if: success()
+        if: success() && steps.resize.outputs.changed != 'false'
         run: |
           # Symptom alerts: back on 10 min after n8n is healthy.
           # Burn-rate alerts: their 1h / 6h windows still hold the night's
@@ -133,7 +161,7 @@ jobs:
             "$(date -u -d '+6 hours 10 minutes' +"%Y-%m-%dT%H:%M:%SZ")"
 
       - name: Send Telegram notification
-        if: always() && vars.TELEGRAM_CHAT_ID != ''
+        if: always() && vars.TELEGRAM_CHAT_ID != '' && steps.resize.outputs.changed != 'false'
         uses: ./.github/actions/telegram-notify
         with:
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
