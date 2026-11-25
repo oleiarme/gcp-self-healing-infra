@@ -79,7 +79,10 @@ services:
 
   cloudflared:
     image: ${CLOUDFLARED_IMAGE}
-    restart: on-failure
+    # "no": on a standby-pool restart dockerd re-runs on-failure containers
+    # killed at VM stop, before startup_cos.sh mounts the data disk. Without
+    # the tunnel that window is not reachable from outside.
+    restart: "no"
     labels:
       container_name: "cloudflared"
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token ${CF_TOKEN}
