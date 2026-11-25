@@ -86,8 +86,7 @@ services:
     ports:
       - "127.0.0.1:2000:2000"
     depends_on:
-      n8n:
-        condition: service_healthy
+      - n8n
     logging:
       driver: "json-file"
       options:
