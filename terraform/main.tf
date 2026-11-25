@@ -306,10 +306,41 @@ resource "google_storage_bucket" "logs_audit" {
 
 # checkov:skip=CKV_GCP_84: Artifact Registry CMK encryption is overkill for a Free Tier project
 resource "google_artifact_registry_repository" "docker" {
-  location      = var.region
-  repository_id = "n8n-docker"
-  format        = "DOCKER"
-  description   = "Docker mirror for n8n/cloudflared to bypass Docker Hub rate limits and speed up cold starts"
+  location               = var.region
+  repository_id          = "n8n-docker"
+  format                 = "DOCKER"
+  description            = "Docker mirror for n8n/cloudflared to bypass Docker Hub rate limits and speed up cold starts"
+  cleanup_policy_dry_run = false
+
+  # Keep active + previous rollback version per package even when older than 14d.
+  cleanup_policies {
+    id     = "keep-recent-versions"
+    action = "KEEP"
+
+    most_recent_versions {
+      keep_count = 2
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-old-tagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "TAGGED"
+      older_than = "1209600s" # 14 days
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s" # 7 days
+    }
+  }
 }
 
 resource "google_project_iam_member" "vm_sa_ar_reader" {
