@@ -42,7 +42,7 @@ jobs:
   start:
     needs: gate
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    timeout-minutes: 75
     if: >-
       needs.gate.outputs.run == 'true' && (
       github.event_name == 'workflow_dispatch' ||
@@ -78,24 +78,54 @@ jobs:
 
       - name: Start MIG instances
         id: start
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -eo pipefail
-          INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
-            --region="$GCP_REGION" \
-            --project="$GCP_PROJECT" \
-            --format="value(instance.basename(),instanceStatus,currentAction)") || {
-            echo "::error::Failed to list MIG instances"
-            exit 1
+          list_instances() {
+            gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+              --region="$GCP_REGION" \
+              --project="$GCP_PROJECT" \
+              --format="value(instance.basename(),instanceStatus,currentAction)"
           }
+
+          # MIG busy with an instance (stopping, recreating, creating...):
+          # wait up to 10 min for it to settle. A start right after a stop
+          # used to skip silently and report success with the VM still down.
+          # $NF is currentAction; a creating instance has no status yet.
+          # Up to 2 transient gcloud failures in a row are tolerated; the
+          # decision below always uses a successful listing (FAILS=0), never
+          # an empty one, so a failed call cannot fall into the cold resize.
+          FAILS=0
+          for i in $(seq 1 40); do
+            if ! INSTANCES=$(list_instances); then
+              FAILS=$((FAILS + 1))
+              echo "gcloud list-instances failed ($FAILS/3)"
+            else
+              FAILS=0
+              echo "$INSTANCES" | awk 'NF && $NF != "NONE" {f=1} END {exit !f}' || break
+              echo "MIG action in progress ($i/40): $(echo "$INSTANCES" | awk 'NF' | paste -sd ';' -)"
+            fi
+            if [ "$FAILS" -ge 3 ]; then
+              echo "::error::Failed to list MIG instances (3 times in a row)"
+              exit 1
+            fi
+            if [ "$i" -lt 40 ]; then sleep 15; fi
+          done
+          if [ "$FAILS" -ne 0 ]; then
+            echo "::error::Last MIG listing failed — not touching the MIG"
+            exit 1
+          fi
           echo "::notice::MIG instances: $(echo "$INSTANCES" | awk 'NF' | paste -sd ';' -)"
 
-          # MIG is busy with an instance (creating, recreating, stopping,
-          # starting...): leave it alone, the next hourly run re-checks.
-          # $NF is currentAction; a creating instance has no status yet.
           if echo "$INSTANCES" | awk 'NF && $NF != "NONE" {f=1} END {exit !f}'; then
-            echo "::notice::MIG action in progress — skipping start"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            if [ "$EVENT" = "schedule" ]; then
+              echo "::warning::MIG still busy after 10 min — skipping, next hourly run re-checks"
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::MIG still busy after 10 min — VM not started"
+            exit 1
           fi
 
           # Already up or booting: nothing to do (no health wait, no Telegram).
