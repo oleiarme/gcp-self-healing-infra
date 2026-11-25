@@ -14,6 +14,10 @@ exec > >(tee /var/log/startup.log) 2>&1
 echo "=== COS Startup Script ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+log_step() {
+  echo "=== [$(date -u +%H:%M:%SZ)] $1 ==="
+}
+
 retry() {
   for i in {1..5}; do
     "$@" && return 0
@@ -176,7 +180,9 @@ mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
 
 # Ensure postgres directory exists with correct permissions (uid 70 for alpine postgres)
 mkdir -p "$DATA_DIR/postgres"
-chown -R 70:70 "$DATA_DIR/postgres"
+if [ "$(stat -c '%u:%g' "$DATA_DIR/postgres")" != "70:70" ]; then
+  chown -R 70:70 "$DATA_DIR/postgres"
+fi
 
 # ==========================================
 # 4.5. Setup Swap File
@@ -195,58 +201,15 @@ if ! grep -q "$DATA_DIR/swapfile" /proc/swaps; then
 fi
 
 # ==========================================
-# 5. Resolve container images (AR mirror with fallback)
+# 5. Configure Artifact Registry Docker credentials
 # ==========================================
-echo "=== Resolve AR Images ==="
-N8N_TARGET="${n8n_ar_image}"
+log_step "Configure Artifact Registry credentials"
 docker-credential-gcr configure-docker --registries="${ar_location}-docker.pkg.dev" >/dev/null 2>&1 || {
   echo "⚠️ Failed to configure Docker credential helper for Artifact Registry"
 }
 
-if ! retry docker manifest inspect "$N8N_TARGET" >/dev/null 2>&1; then
-  echo "⚠️ AR miss for n8n → fallback to public"
-  N8N_TARGET="${n8n_image}"
-fi
-echo "Using n8n image: $N8N_TARGET"
-
-CF_TARGET="${cloudflared_ar_image}"
-if ! retry docker manifest inspect "$CF_TARGET" >/dev/null 2>&1; then
-  echo "⚠️ AR miss for cloudflared → fallback to public"
-  CF_TARGET="${cloudflared_image}"
-fi
-echo "Using cloudflared image: $CF_TARGET"
-
-POSTGRES_TARGET="${postgres_ar_image}"
-if ! retry docker manifest inspect "$POSTGRES_TARGET" >/dev/null 2>&1; then
-  echo "⚠️ AR miss for postgres → fallback to public"
-  POSTGRES_TARGET="${postgres_image}"
-fi
-echo "Using postgres image: $POSTGRES_TARGET"
-
-SIDECAR_TARGET="${healthz_sidecar_ar_image}"
-
-
-# ==========================================
-# 6. Write environment file
-# ==========================================
-echo "=== Setup Environment ==="
 COMPOSE_DIR="/var/lib/docker/compose/n8n"
 mkdir -p "$COMPOSE_DIR"
-
-cat <<EOF > "$COMPOSE_DIR/.env"
-CF_TOKEN=$CF_TOKEN
-N8N_KEY=$N8N_KEY
-DB_PASSWORD=$DB_PASSWORD
-DB_NAME=${db_name}
-DB_USER=${db_user}
-N8N_IMAGE=$N8N_TARGET
-CLOUDFLARED_IMAGE=$CF_TARGET
-POSTGRES_IMAGE=$POSTGRES_TARGET
-HEALTHZ_SIDECAR_IMAGE=$SIDECAR_TARGET
-DATA_DIR=$DATA_DIR
-N8N_PUBLIC_HOST=${n8n_public_host}
-EOF
-chmod 600 "$COMPOSE_DIR/.env"
 
 # ==========================================
 # 7. Copy docker-compose and healthz-sidecar files
@@ -340,8 +303,7 @@ services:
     ports:
       - "127.0.0.1:2000:2000"
     depends_on:
-      n8n:
-        condition: service_healthy
+      - n8n
     logging:
       driver: "json-file"
       options:
@@ -613,61 +575,78 @@ if __name__ == "__main__":
 EOF
 
 # ==========================================
-# 9. Pull images in parallel
+# 9. Pull images sequentially (avoids swap/IOPS thrashing on e2-micro)
 # ==========================================
-echo "=== Pulling images in parallel ==="
 cd "$COMPOSE_DIR"
 
-# Launch pulls in background redirecting logs
-retry timeout 1800 docker pull "$N8N_TARGET" > /var/log/pull_n8n.log 2>&1 &
-PID_N8N=$!
-
-retry timeout 600 docker pull "$CF_TARGET" > /var/log/pull_cf.log 2>&1 &
-PID_CF=$!
-
-retry timeout 600 docker pull "$POSTGRES_TARGET" > /var/log/pull_postgres.log 2>&1 &
-PID_POSTGRES=$!
-
-# For sidecar, try pull in background; if it fails we will build it.
-# We don't want the script to immediately exit if pull sidecar fails, because we can fallback to building it.
-retry timeout 600 docker pull "$SIDECAR_TARGET" > /var/log/pull_sidecar.log 2>&1 &
-PID_SIDECAR=$!
-
-# Wait for all background pulls to complete and track failures
-FAIL=0
-
-wait $PID_N8N || {
-  echo "❌ Docker pull failed for n8n. Log output:"
-  cat /var/log/pull_n8n.log
-  FAIL=1
+pull_image() {
+  local name="$1"
+  local primary="$2"
+  local fallback="$3"
+  local timeout_sec="$4"
+  log_step "Pulling $name ($primary)"
+  if timeout "$timeout_sec" docker pull "$primary"; then
+    PULLED_IMAGE="$primary"
+    return 0
+  fi
+  if [ -n "$fallback" ] && [ "$fallback" != "$primary" ]; then
+    echo "⚠️ AR pull failed for $name → fallback to $fallback"
+    if retry timeout "$timeout_sec" docker pull "$fallback"; then
+      PULLED_IMAGE="$fallback"
+      return 0
+    fi
+  fi
+  return 1
 }
 
-wait $PID_CF || {
-  echo "❌ Docker pull failed for cloudflared. Log output:"
-  cat /var/log/pull_cf.log
-  FAIL=1
-}
-
-wait $PID_POSTGRES || {
-  echo "❌ Docker pull failed for postgres. Log output:"
-  cat /var/log/pull_postgres.log
-  FAIL=1
-}
-
-if [ "$FAIL" -ne 0 ]; then
-  echo "❌ One or more critical container pulls failed."
+pull_image "postgres" "${postgres_ar_image}" "${postgres_image}" 600 || {
+  echo "❌ Docker pull failed for postgres"
   exit 1
+}
+POSTGRES_TARGET="$PULLED_IMAGE"
+
+pull_image "cloudflared" "${cloudflared_ar_image}" "${cloudflared_image}" 600 || {
+  echo "❌ Docker pull failed for cloudflared"
+  exit 1
+}
+CF_TARGET="$PULLED_IMAGE"
+
+pull_image "n8n" "${n8n_ar_image}" "${n8n_image}" 1800 || {
+  echo "❌ Docker pull failed for n8n"
+  exit 1
+}
+N8N_TARGET="$PULLED_IMAGE"
+
+SIDECAR_TARGET="${healthz_sidecar_ar_image}"
+log_step "Pulling healthz-sidecar ($SIDECAR_TARGET)"
+if ! timeout 600 docker pull "$SIDECAR_TARGET"; then
+  echo "⚠️ AR pull failed for healthz-sidecar → building locally..."
+  docker build -t "$SIDECAR_TARGET" "$COMPOSE_DIR/healthz-sidecar"
 fi
 
-wait $PID_SIDECAR || {
-  echo "⚠️ AR miss for healthz-sidecar (or pull failed) → building locally..."
-  docker build -t "$SIDECAR_TARGET" "$COMPOSE_DIR/healthz-sidecar"
-}
+# ==========================================
+# 9.5 Write environment file
+# ==========================================
+log_step "Write .env"
+cat <<EOF > "$COMPOSE_DIR/.env"
+CF_TOKEN=$CF_TOKEN
+N8N_KEY=$N8N_KEY
+DB_PASSWORD=$DB_PASSWORD
+DB_NAME=${db_name}
+DB_USER=${db_user}
+N8N_IMAGE=$N8N_TARGET
+CLOUDFLARED_IMAGE=$CF_TARGET
+POSTGRES_IMAGE=$POSTGRES_TARGET
+HEALTHZ_SIDECAR_IMAGE=$SIDECAR_TARGET
+DATA_DIR=$DATA_DIR
+N8N_PUBLIC_HOST=${n8n_public_host}
+EOF
+chmod 600 "$COMPOSE_DIR/.env"
 
 # ==========================================
 # 10. Start services in order
 # ==========================================
-echo "=== Starting Postgres ==="
+log_step "Starting Postgres"
 $COMPOSE_CMD up -d postgres || {
   echo "❌ $COMPOSE_CMD up postgres failed"
   $COMPOSE_CMD logs --no-log-prefix -n 50 postgres 2>/dev/null || docker logs --tail 50 postgres 2>/dev/null || true
@@ -694,7 +673,7 @@ if [ "$READY" != "true" ]; then
   exit 1
 fi
 
-echo "=== Starting Application Containers ==="
+log_step "Starting Application Containers"
 $COMPOSE_CMD up -d n8n cloudflared healthz-sidecar || {
   echo "❌ $COMPOSE_CMD up apps failed"
   $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || docker logs --tail 100 n8n 2>/dev/null || true
@@ -704,7 +683,7 @@ $COMPOSE_CMD up -d n8n cloudflared healthz-sidecar || {
 # ==========================================
 # 11. Verify startup
 # ==========================================
-echo "=== Verifying startup ==="
+log_step "Verifying startup"
 HEALTHY=false
 for i in {1..60}; do
   n8n_ok=false
