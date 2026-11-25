@@ -83,11 +83,20 @@ jobs:
           INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --format="value(instance.basename(),instanceStatus)") || {
+            --format="value(instance.basename(),instanceStatus,currentAction)") || {
             echo "::error::Failed to list MIG instances"
             exit 1
           }
           echo "::notice::MIG instances: $(echo "$INSTANCES" | awk 'NF' | paste -sd ';' -)"
+
+          # MIG is busy with an instance (creating, recreating, stopping,
+          # starting...): leave it alone, the next hourly run re-checks.
+          # $NF is currentAction; a creating instance has no status yet.
+          if echo "$INSTANCES" | awk 'NF && $NF != "NONE" {f=1} END {exit !f}'; then
+            echo "::notice::MIG action in progress — skipping start"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # Already up or booting: nothing to do (no health wait, no Telegram).
           if echo "$INSTANCES" | awk '$2 ~ /^(RUNNING|PROVISIONING|STAGING)$/ {f=1} END {exit !f}'; then
@@ -96,7 +105,7 @@ jobs:
             exit 0
           fi
 
-          STOPPED=$(echo "$INSTANCES" | awk '$2 ~ /^(TERMINATED|STOPPED|STOPPING)$/ {print $1}' | paste -sd, -)
+          STOPPED=$(echo "$INSTANCES" | awk '$2 ~ /^(TERMINATED|STOPPED)$/ {print $1}' | paste -sd, -)
           if [ -n "$STOPPED" ]; then
             echo "::notice::start — starting $STOPPED in $MIG_NAME (standby pool)"
             gcloud compute instance-groups managed start-instances "$MIG_NAME" \

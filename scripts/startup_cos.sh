@@ -9,20 +9,24 @@
 # Requirements: 8.4, 8.5
 set -e
 set -o pipefail
-exec > >(tee /var/log/startup.log) 2>&1
+exec > >(tee -a /var/log/startup.log) 2>&1
 
 echo "=== COS Startup Script ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Standby pool: the MIG stops and starts this same VM (same instance id), so
+# cloud-init treats the next boot as "already done" and skips user-data
+# scripts (scripts_user runs once per instance). Removing its semaphore
+# makes cloud-init run this script again on every boot. Done first, so a
+# failed run is also retried on the next boot.
+rm -f /var/lib/cloud/instance/sem/config_scripts_user
 
 log_step() {
   echo "=== [$(date -u +%H:%M:%SZ)] $1 ==="
 }
 
-# Usage: retry CMD...  (5 attempts); RETRY_ATTEMPTS=N retry CMD...
 retry() {
-  local attempts="$${RETRY_ATTEMPTS:-5}"
-  local i
-  for ((i = 1; i <= attempts; i++)); do
+  for i in {1..5}; do
     "$@" && return 0
     sleep 5
   done
@@ -604,11 +608,20 @@ pull_image() {
   local fallback="$3"
   local timeout_sec="$4"
   log_step "Pulling $name ($primary)"
-  # 3 attempts: one transient AR error must not drop us to Docker Hub.
-  if RETRY_ATTEMPTS=3 retry timeout "$timeout_sec" docker pull "$primary"; then
-    PULLED_IMAGE="$primary"
-    return 0
-  fi
+  # Up to 3 attempts: one transient AR error must not drop us to Docker Hub.
+  # A timeout (exit 124) is not retried: 3 x 1800 s for n8n would outlast
+  # the auto-healing initial delay (2400 s).
+  local attempt rc
+  for attempt in 1 2 3; do
+    if timeout "$timeout_sec" docker pull "$primary"; then
+      PULLED_IMAGE="$primary"
+      return 0
+    else
+      rc=$?
+    fi
+    [ "$rc" -eq 124 ] && break
+    [ "$attempt" -lt 3 ] && sleep 5
+  done
   if [ -n "$fallback" ] && [ "$fallback" != "$primary" ]; then
     echo "⚠️ AR pull failed for $name → fallback to $fallback"
     if retry timeout "$timeout_sec" docker pull "$fallback"; then
@@ -730,6 +743,9 @@ done
 if [ "$HEALTHY" = true ]; then
   echo "=== COS Startup complete ==="
   $COMPOSE_CMD ps
+  # Standby pool keeps this boot disk (20 GB) for weeks: drop images no
+  # container uses (old n8n versions after deploys), keep the running ones.
+  docker image prune -af >/dev/null 2>&1 || echo "⚠️ docker image prune failed"
 else
   echo "❌ CRITICAL: startup failed"
   $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || true

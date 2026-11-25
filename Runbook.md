@@ -362,8 +362,12 @@ To shrink a disk (e.g., from 20 GB to 10 GB):
 3. Terraform will show `forces replacement` for the disk
 4. Manually delete the disk via gcloud **before** pushing again:
    ```bash
-   # Stop the MIG (detach disk)
-   gcloud compute instance-groups managed resize n8n-mig --size=0 --region=us-central1
+   # Delete the VM (detach disk). Not `resize --size=0`: with the standby
+   # pool a stopped VM is not deleted by resize and keeps the disk attached.
+   INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig \
+     --region=us-central1 --format="value(instance.basename())" | head -1)
+   gcloud compute instance-groups managed delete-instances n8n-mig \
+     --instances="$INSTANCE" --region=us-central1
 
    # Wait for VM to stop (check it's gone)
    gcloud compute instances list --filter="name ~ n8n"
