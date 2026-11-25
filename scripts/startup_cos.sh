@@ -9,10 +9,17 @@
 # Requirements: 8.4, 8.5
 set -e
 set -o pipefail
-exec > >(tee /var/log/startup.log) 2>&1
+exec > >(tee -a /var/log/startup.log) 2>&1
 
 echo "=== COS Startup Script ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Standby pool: the MIG stops and starts this same VM (same instance id), so
+# cloud-init treats the next boot as "already done" and skips user-data
+# scripts (scripts_user runs once per instance). Removing its semaphore
+# makes cloud-init run this script again on every boot. Done first, so a
+# failed run is also retried on the next boot.
+rm -f /var/lib/cloud/instance/sem/config_scripts_user
 
 log_step() {
   echo "=== [$(date -u +%H:%M:%SZ)] $1 ==="
@@ -175,8 +182,24 @@ if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
 fi
 
 mkdir -p "$DATA_DIR"
-fsck -a "$DATA_DISK" || true
-mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
+if mountpoint -q "$DATA_DIR"; then
+  echo "✅ $DATA_DIR already mounted"
+else
+  # Standby pool: on start of a stopped VM, Docker may have restarted a
+  # container before this script ran (restart: on-failure after an unclean
+  # shutdown). A postgres container started now would use an empty
+  # $DATA_DIR on the boot disk, and the mount below would hide it while
+  # the container keeps writing there. Stop all containers first; step 10
+  # starts them again in order, after the mount.
+  RUNNING_CONTAINERS=$(docker ps -q)
+  if [ -n "$RUNNING_CONTAINERS" ]; then
+    echo "⚠️ Containers running before data disk mount — stopping them"
+    # shellcheck disable=SC2086
+    docker stop $RUNNING_CONTAINERS
+  fi
+  fsck -a "$DATA_DISK" || true
+  mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
+fi
 
 # Ensure postgres directory exists with correct permissions (uid 70 for alpine postgres)
 mkdir -p "$DATA_DIR/postgres"
@@ -226,7 +249,7 @@ if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
 services:
   postgres:
     image: $${POSTGRES_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "postgres"
     ports:
@@ -250,7 +273,7 @@ services:
 
   n8n:
     image: $${N8N_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "n8n"
     ports:
@@ -296,7 +319,7 @@ services:
 
   cloudflared:
     image: $${CLOUDFLARED_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "cloudflared"
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
@@ -312,7 +335,7 @@ services:
 
   healthz-sidecar:
     image: $${HEALTHZ_SIDECAR_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "healthz-sidecar"
     ports:
@@ -585,10 +608,20 @@ pull_image() {
   local fallback="$3"
   local timeout_sec="$4"
   log_step "Pulling $name ($primary)"
-  if timeout "$timeout_sec" docker pull "$primary"; then
-    PULLED_IMAGE="$primary"
-    return 0
-  fi
+  # Up to 3 attempts: one transient AR error must not drop us to Docker Hub.
+  # A timeout (exit 124) is not retried: 3 x 1800 s for n8n would outlast
+  # the auto-healing initial delay (2400 s).
+  local attempt rc
+  for attempt in 1 2 3; do
+    if timeout "$timeout_sec" docker pull "$primary"; then
+      PULLED_IMAGE="$primary"
+      return 0
+    else
+      rc=$?
+    fi
+    [ "$rc" -eq 124 ] && break
+    [ "$attempt" -lt 3 ] && sleep 5
+  done
   if [ -n "$fallback" ] && [ "$fallback" != "$primary" ]; then
     echo "⚠️ AR pull failed for $name → fallback to $fallback"
     if retry timeout "$timeout_sec" docker pull "$fallback"; then
@@ -710,6 +743,9 @@ done
 if [ "$HEALTHY" = true ]; then
   echo "=== COS Startup complete ==="
   $COMPOSE_CMD ps
+  # Standby pool keeps this boot disk (20 GB) for weeks: drop images no
+  # container uses (old n8n versions after deploys), keep the running ones.
+  docker image prune -af >/dev/null 2>&1 || echo "⚠️ docker image prune failed"
 else
   echo "❌ CRITICAL: startup failed"
   $COMPOSE_CMD logs --no-log-prefix -n 100 2>/dev/null || true

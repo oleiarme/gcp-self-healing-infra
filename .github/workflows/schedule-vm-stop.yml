@@ -1,4 +1,6 @@
-# Stop VM: resize MIG to 0 on night schedule or manual trigger.
+# Stop VM: stop the MIG instance (standby pool) on night schedule or manual
+# trigger. The VM is stopped, not deleted: boot disk and cached docker
+# images survive, so the morning start skips the ~10 min image pull.
 # Auth via Workload Identity Federation (same as deploy.yml, no JSON keys).
 # Disable via VM_SCHEDULE_ENABLED=false GitHub variable.
 
@@ -71,21 +73,22 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Resize MIG to 0
-        id: resize
+      - name: Stop MIG instances
+        id: stop
         run: |
-          CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
+          set -eo pipefail
+          RUNNING=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --format="value(targetSize)" 2>/dev/null) || {
-            echo "::error::Failed to get MIG size"
+            --filter="instanceStatus=RUNNING" \
+            --format="value(instance.basename())") || {
+            echo "::error::Failed to list MIG instances"
             exit 1
           }
+          RUNNING=$(echo "$RUNNING" | awk 'NF' | paste -sd, -)
 
-          echo "::notice::Current MIG target size: $CURRENT_SIZE"
-
-          if [ "$CURRENT_SIZE" = "0" ]; then
-            echo "::notice::MIG already at size=0 — skipping resize"
+          if [ -z "$RUNNING" ]; then
+            echo "::notice::No RUNNING instances in $MIG_NAME — skipping stop"
             # Hourly runs: nothing else to do (no Telegram).
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -139,16 +142,16 @@ jobs:
           create_snooze "n8n planned nightly shutdown" "$(policies_for fast)" 20
           create_snooze "n8n planned nightly shutdown (SLO windows)" "$(policies_for slo)" 26
 
-          echo "::notice::stop — resizing $MIG_NAME from $CURRENT_SIZE to 0"
+          echo "::notice::stop — stopping $RUNNING in $MIG_NAME (standby pool)"
 
-          gcloud compute instance-groups managed resize "$MIG_NAME" \
-            --size=0 \
+          gcloud compute instance-groups managed stop-instances "$MIG_NAME" \
+            --instances="$RUNNING" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
             --quiet
 
       - name: Send Telegram notification
-        if: always() && vars.TELEGRAM_CHAT_ID != '' && steps.resize.outputs.changed != 'false'
+        if: always() && vars.TELEGRAM_CHAT_ID != '' && steps.stop.outputs.changed != 'false'
         uses: ./.github/actions/telegram-notify
         with:
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}

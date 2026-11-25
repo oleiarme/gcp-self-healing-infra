@@ -1,4 +1,6 @@
-# Start VM: resize MIG to 1 on morning schedule or manual trigger.
+# Start VM: start the stopped MIG instance (standby pool) on morning
+# schedule or manual trigger. Fallback: resize MIG to 1 if it has no
+# instance at all (first run after migration, or VM deleted by hand).
 # Auth via Workload Identity Federation (same as deploy.yml, no JSON keys).
 # Disable via VM_SCHEDULE_ENABLED=false GitHub variable.
 
@@ -74,33 +76,57 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Resize MIG to 1
-        id: resize
+      - name: Start MIG instances
+        id: start
         run: |
-          CURRENT_SIZE=$(gcloud compute instance-groups managed describe "$MIG_NAME" \
+          set -eo pipefail
+          INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --format="value(targetSize)" 2>/dev/null) || {
-            echo "::error::Failed to get MIG size"
+            --format="value(instance.basename(),instanceStatus,currentAction)") || {
+            echo "::error::Failed to list MIG instances"
             exit 1
           }
-          echo "::notice::Current MIG target size: $CURRENT_SIZE"
+          echo "::notice::MIG instances: $(echo "$INSTANCES" | awk 'NF' | paste -sd ';' -)"
 
-          if [ "$CURRENT_SIZE" = "1" ]; then
-            echo "::notice::MIG already at size=1 — skipping resize"
-            # Hourly runs: nothing else to do (no health wait, no Telegram).
+          # MIG is busy with an instance (creating, recreating, stopping,
+          # starting...): leave it alone, the next hourly run re-checks.
+          # $NF is currentAction; a creating instance has no status yet.
+          if echo "$INSTANCES" | awk 'NF && $NF != "NONE" {f=1} END {exit !f}'; then
+            echo "::notice::MIG action in progress — skipping start"
             echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::start — resizing $MIG_NAME from $CURRENT_SIZE to 1"
+            exit 0
+          fi
+
+          # Already up or booting: nothing to do (no health wait, no Telegram).
+          if echo "$INSTANCES" | awk '$2 ~ /^(RUNNING|PROVISIONING|STAGING)$/ {f=1} END {exit !f}'; then
+            echo "::notice::Instance already RUNNING/starting — skipping start"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          STOPPED=$(echo "$INSTANCES" | awk '$2 ~ /^(TERMINATED|STOPPED)$/ {print $1}' | paste -sd, -)
+          if [ -n "$STOPPED" ]; then
+            echo "::notice::start — starting $STOPPED in $MIG_NAME (standby pool)"
+            gcloud compute instance-groups managed start-instances "$MIG_NAME" \
+              --instances="$STOPPED" \
+              --region="$GCP_REGION" \
+              --project="$GCP_PROJECT" \
+              --quiet
+          elif [ -z "$(echo "$INSTANCES" | awk 'NF')" ]; then
+            echo "::notice::start — MIG has no instances, resizing $MIG_NAME to 1 (cold start)"
             gcloud compute instance-groups managed resize "$MIG_NAME" \
               --size=1 \
               --region="$GCP_REGION" \
               --project="$GCP_PROJECT" \
-              --quiet || exit 1
+              --quiet
+          else
+            echo "::error::Unexpected MIG instance state, not touching it: $INSTANCES"
+            exit 1
           fi
 
       - name: Wait for VM to become healthy
-        if: steps.resize.outputs.changed != 'false'
+        if: steps.start.outputs.changed != 'false'
         run: |
           bash .github/scripts/wait-gcp-mig.sh \
             --name "$MIG_NAME" \
@@ -125,7 +151,7 @@ jobs:
             --project="$GCP_PROJECT"
 
       - name: Health check (n8n /healthz)
-        if: env.N8N_HOST != '' && steps.resize.outputs.changed != 'false'
+        if: env.N8N_HOST != '' && steps.start.outputs.changed != 'false'
         run: |
           bash .github/scripts/wait-url.sh \
             --url "https://$N8N_HOST/healthz" \
@@ -133,7 +159,7 @@ jobs:
             --timeout 1800
 
       - name: End planned-shutdown snoozes
-        if: success() && steps.resize.outputs.changed != 'false'
+        if: success() && steps.start.outputs.changed != 'false'
         run: |
           # Symptom alerts: back on 10 min after n8n is healthy.
           # Burn-rate alerts: their 1h / 6h windows still hold the night's
@@ -161,7 +187,7 @@ jobs:
             "$(date -u -d '+6 hours 10 minutes' +"%Y-%m-%dT%H:%M:%SZ")"
 
       - name: Send Telegram notification
-        if: always() && vars.TELEGRAM_CHAT_ID != '' && steps.resize.outputs.changed != 'false'
+        if: always() && vars.TELEGRAM_CHAT_ID != '' && steps.start.outputs.changed != 'false'
         uses: ./.github/actions/telegram-notify
         with:
           bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}

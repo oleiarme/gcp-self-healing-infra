@@ -91,6 +91,7 @@ jobs:
           set -eo pipefail
           INSTANCE_URL=$(gcloud compute instance-groups managed list-instances n8n-mig \
             --region="${REGION}" --project="${PROJECT}" \
+            --filter="instanceStatus=RUNNING" \
             --format="value(instance)" | head -1)
           INSTANCE="${INSTANCE_URL##*/}"
           ZONE_FROM_URL=$(echo "$INSTANCE_URL" | sed -n 's#.*/zones/\([^/]*\)/instances/.*#\1#p')

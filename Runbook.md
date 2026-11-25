@@ -362,8 +362,12 @@ To shrink a disk (e.g., from 20 GB to 10 GB):
 3. Terraform will show `forces replacement` for the disk
 4. Manually delete the disk via gcloud **before** pushing again:
    ```bash
-   # Stop the MIG (detach disk)
-   gcloud compute instance-groups managed resize n8n-mig --size=0 --region=us-central1
+   # Delete the VM (detach disk). Not `resize --size=0`: with the standby
+   # pool a stopped VM is not deleted by resize and keeps the disk attached.
+   INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig \
+     --region=us-central1 --format="value(instance.basename())" | head -1)
+   gcloud compute instance-groups managed delete-instances n8n-mig \
+     --instances="$INSTANCE" --region=us-central1
 
    # Wait for VM to stop (check it's gone)
    gcloud compute instances list --filter="name ~ n8n"
@@ -644,8 +648,9 @@ export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig 
 | `gcloud secrets versions list n8n-db-secret --project=$PROJECT_ID` | List secret versions |
 | `gcloud compute disks describe google-n8n-data --zone=$ZONE --project=$PROJECT_ID` | Verify data disk exists |
 | `gcloud storage ls --versions "gs://<bucket>/terraform/state/default.tfstate"` | List Terraform state versions |
-| `gcloud compute instance-groups managed resize n8n-mig --size=0 --region=$REGION` | Stop VM (save costs) |
-| `gcloud compute instance-groups managed resize n8n-mig --size=1 --region=$REGION` | Start VM |
+| `gcloud compute instance-groups managed stop-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Stop VM (save costs; VM kept in standby pool, docker images stay cached) |
+| `gcloud compute instance-groups managed start-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Start stopped VM (fast start) |
+| `gcloud compute instance-groups managed resize n8n-mig --size=1 --region=$REGION` | Create VM when MIG has none (cold start, full image pull) |
 
 ### Health Check URLs
 
