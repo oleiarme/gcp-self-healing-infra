@@ -8,7 +8,7 @@
 services:
   postgres:
     image: ${POSTGRES_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "postgres"
     ports:
@@ -32,7 +32,7 @@ services:
 
   n8n:
     image: ${N8N_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "n8n"
     ports:
@@ -79,7 +79,7 @@ services:
 
   cloudflared:
     image: ${CLOUDFLARED_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "cloudflared"
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token ${CF_TOKEN}
@@ -95,7 +95,7 @@ services:
 
   healthz-sidecar:
     image: ${HEALTHZ_SIDECAR_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "healthz-sidecar"
     ports:

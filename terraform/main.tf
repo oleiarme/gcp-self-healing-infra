@@ -542,6 +542,24 @@ resource "google_compute_region_instance_group_manager" "mig" {
     replacement_method           = "RECREATE"
     instance_redistribution_type = "NONE"
   }
+
+  # Standby pool: the nightly Stop VM workflow moves the VM into the
+  # stopped pool (stop-instances) instead of deleting it (resize 0), so the
+  # morning start reuses the boot disk with docker images already cached.
+  # MANUAL = MIG never stops/starts instances on its own; only the
+  # schedule workflows do. A stopped VM keeps its boot disk (20 GB) and the
+  # stateful n8n-data disk (10 GB): 30 GB-month, same as a running VM.
+  standby_policy {
+    mode = "MANUAL"
+  }
+
+  # target_size / target_stopped_size are driven at runtime by the
+  # schedule-vm-*.yml workflows (stop-instances / start-instances). Without
+  # this, a terraform apply in the night would set target_size back to 1
+  # and start the stopped VM.
+  lifecycle {
+    ignore_changes = [target_size, target_stopped_size]
+  }
 }
 
 # ==========================================

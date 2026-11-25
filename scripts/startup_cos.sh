@@ -18,8 +18,11 @@ log_step() {
   echo "=== [$(date -u +%H:%M:%SZ)] $1 ==="
 }
 
+# Usage: retry CMD...  (5 attempts); RETRY_ATTEMPTS=N retry CMD...
 retry() {
-  for i in {1..5}; do
+  local attempts="$${RETRY_ATTEMPTS:-5}"
+  local i
+  for ((i = 1; i <= attempts; i++)); do
     "$@" && return 0
     sleep 5
   done
@@ -175,8 +178,24 @@ if ! blkid "$DATA_DISK" | grep -q 'TYPE="ext4"'; then
 fi
 
 mkdir -p "$DATA_DIR"
-fsck -a "$DATA_DISK" || true
-mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
+if mountpoint -q "$DATA_DIR"; then
+  echo "✅ $DATA_DIR already mounted"
+else
+  # Standby pool: on start of a stopped VM, Docker may have restarted a
+  # container before this script ran (restart: on-failure after an unclean
+  # shutdown). A postgres container started now would use an empty
+  # $DATA_DIR on the boot disk, and the mount below would hide it while
+  # the container keeps writing there. Stop all containers first; step 10
+  # starts them again in order, after the mount.
+  RUNNING_CONTAINERS=$(docker ps -q)
+  if [ -n "$RUNNING_CONTAINERS" ]; then
+    echo "⚠️ Containers running before data disk mount — stopping them"
+    # shellcheck disable=SC2086
+    docker stop $RUNNING_CONTAINERS
+  fi
+  fsck -a "$DATA_DISK" || true
+  mount -o discard,defaults "$DATA_DISK" "$DATA_DIR"
+fi
 
 # Ensure postgres directory exists with correct permissions (uid 70 for alpine postgres)
 mkdir -p "$DATA_DIR/postgres"
@@ -226,7 +245,7 @@ if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
 services:
   postgres:
     image: $${POSTGRES_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "postgres"
     ports:
@@ -250,7 +269,7 @@ services:
 
   n8n:
     image: $${N8N_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "n8n"
     ports:
@@ -296,7 +315,7 @@ services:
 
   cloudflared:
     image: $${CLOUDFLARED_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "cloudflared"
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 run --token $${CF_TOKEN}
@@ -312,7 +331,7 @@ services:
 
   healthz-sidecar:
     image: $${HEALTHZ_SIDECAR_IMAGE}
-    restart: unless-stopped
+    restart: on-failure
     labels:
       container_name: "healthz-sidecar"
     ports:
@@ -585,7 +604,8 @@ pull_image() {
   local fallback="$3"
   local timeout_sec="$4"
   log_step "Pulling $name ($primary)"
-  if timeout "$timeout_sec" docker pull "$primary"; then
+  # 3 attempts: one transient AR error must not drop us to Docker Hub.
+  if RETRY_ATTEMPTS=3 retry timeout "$timeout_sec" docker pull "$primary"; then
     PULLED_IMAGE="$primary"
     return 0
   fi

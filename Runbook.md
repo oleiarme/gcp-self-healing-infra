@@ -644,8 +644,9 @@ export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig 
 | `gcloud secrets versions list n8n-db-secret --project=$PROJECT_ID` | List secret versions |
 | `gcloud compute disks describe google-n8n-data --zone=$ZONE --project=$PROJECT_ID` | Verify data disk exists |
 | `gcloud storage ls --versions "gs://<bucket>/terraform/state/default.tfstate"` | List Terraform state versions |
-| `gcloud compute instance-groups managed resize n8n-mig --size=0 --region=$REGION` | Stop VM (save costs) |
-| `gcloud compute instance-groups managed resize n8n-mig --size=1 --region=$REGION` | Start VM |
+| `gcloud compute instance-groups managed stop-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Stop VM (save costs; VM kept in standby pool, docker images stay cached) |
+| `gcloud compute instance-groups managed start-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Start stopped VM (fast start) |
+| `gcloud compute instance-groups managed resize n8n-mig --size=1 --region=$REGION` | Create VM when MIG has none (cold start, full image pull) |
 
 ### Health Check URLs
 
