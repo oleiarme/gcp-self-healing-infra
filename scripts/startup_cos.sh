@@ -241,6 +241,9 @@ echo "=== Setup /var/lib/docker/cli-plugins/docker-compose ==="
 
 # Copy compose file (rendered by Terraform templatefile or baked into image)
 # On COS, we write the compose file directly since we can't rely on /opt
+# Standby pool keeps the boot disk: drop the previous boot's file so compose
+# changes (e.g. restart policy) reach a restarted VM, not only a new one.
+rm -f "$COMPOSE_DIR/docker-compose.yml"
 cp /var/lib/cloud/instance/scripts/docker-compose.cos.yml "$COMPOSE_DIR/docker-compose.yml" 2>/dev/null || true
 
 # If compose file wasn't provided via cloud-init, write it inline
