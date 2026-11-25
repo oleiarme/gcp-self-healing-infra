@@ -98,6 +98,8 @@ jobs:
       - name: tflint --init
         run: tflint --init
         working-directory: ./terraform
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: tflint
         # --recursive walks every module dir. --minimum-failure-severity=warning
         # means warnings still block the PR, matching the rest of the CI.
