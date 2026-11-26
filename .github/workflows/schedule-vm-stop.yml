@@ -111,7 +111,12 @@ jobs:
             for NAME in $(echo "$INSTANCES" | awk '$2 == "RUNNING" {print $1}'); do
               STARTED=$(gcloud compute instances list --project="$GCP_PROJECT" \
                 --filter="name=$NAME" --format="value(lastStartTimestamp)")
-              AGE=$(( $(date +%s) - $(date -d "$STARTED" +%s) ))
+              # Unknown start time = treat as just started (`date -d ""`
+              # would silently mean today 00:00).
+              AGE=0
+              if [ -n "$STARTED" ]; then
+                AGE=$(( $(date +%s) - $(date -d "$STARTED" +%s) ))
+              fi
               if [ "$AGE" -lt 2400 ]; then
                 echo "::notice::$NAME started ${AGE}s ago (< 40 min) — skipping stop"
                 echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -191,6 +196,17 @@ jobs:
           SLO_END=$(next_lisbon 15:05)
           create_snooze "n8n planned nightly shutdown" "$(policies_for fast)" "$FAST_END"
           create_snooze "n8n planned nightly shutdown (SLO windows)" "$(policies_for slo)" "$SLO_END"
+
+          # Re-check right before stopping: a deploy may have started a MIG
+          # update during the snooze calls above.
+          if [ "$EVENT" = "schedule" ] && gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+              --region="$GCP_REGION" --project="$GCP_PROJECT" \
+              --format="value(instance.basename(),instanceStatus,currentAction)" |
+              awk 'NF && $NF != "NONE" {f=1} END {exit !f}'; then
+            echo "::notice::MIG action started meanwhile — skipping stop (next hourly run retries)"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           echo "::notice::stop — stopping $RUNNING in $MIG_NAME (standby pool)"
 
