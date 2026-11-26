@@ -135,6 +135,12 @@ variable "CF_TUNNEL_TOKEN" {
 # Observability (Phase 2 of docs/slo-roadmap)
 # --------------------------------------------------------
 
+variable "cos_image" {
+  description = "Container-Optimized OS image name in project cos-cloud. Bump deliberately; latest: `gcloud compute images describe-from-family cos-stable --project=cos-cloud --format='value(name)'`. A change replaces the instance template and recreates the VM (cold start)."
+  type        = string
+  default     = "cos-stable-121-18867-652-94"
+}
+
 variable "n8n_public_host" {
   description = "Public FQDN of the n8n deployment (no scheme, no path). Probed by the SLI uptime check on https://<host>/healthz. Example: 'n8n.example.com'."
   type        = string

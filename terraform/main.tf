@@ -106,15 +106,15 @@ locals {
   healthz_sidecar_ar_image = "${local.ar_prefix}/healthz-sidecar:${var.healthz_sidecar_tag}"
 }
 
-# Pin the COS image to a specific version. Using `family` resolves to the
-# latest image at plan time, but the resolved self_link (which includes the
-# image name, e.g. cos-stable-117-18613-150-29) is baked into the instance
-# template. This means a `terraform apply` captures the exact image, and
-# subsequent VM recreations by the MIG reuse that same image until the next
-# `terraform apply` resolves a newer one. This prevents silent OS upgrades
-# between VM recreations.
+# COS image pinned by name (var.cos_image). Resolving `family = "cos-stable"`
+# at plan time made ANY apply — even a docs-only commit — replace the
+# instance template whenever Google published a new COS build. With the VM
+# stopped in the standby pool, the MIG then replaced the boot disk, started
+# the VM and stopped it again ~2.5 min later, in the middle of the COS first
+# boot; the next start hung at "Waiting for root device /dev/dm-0"
+# (2026-11-26). OS upgrades are now a deliberate change of var.cos_image.
 data "google_compute_image" "cos" {
-  family  = "cos-stable"
+  name    = var.cos_image
   project = "cos-cloud"
 }
 
