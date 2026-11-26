@@ -220,6 +220,42 @@ jobs:
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
+      # Guard for the MIG standby pool. If this apply replaces the instance
+      # template while the VM is STOPPED, the MIG replaces the boot disk,
+      # starts the VM and stops it again ~2.5 min later — in the middle of
+      # the COS first boot — and the next start hangs (2026-11-26). So: start
+      # the VM before the apply, let the MIG recreate it while RUNNING, wait
+      # until n8n is healthy (first boot finished), then stop it again.
+      - name: Start stopped VM before template update
+        id: prestart
+        env:
+          MIG_NAME: n8n-mig
+        run: |
+          set -eo pipefail
+          REPLACES_TEMPLATE=$(terraform show -json tfplan | jq -r '
+            [.resource_changes[]?
+             | select(.address == "google_compute_instance_template.tpl")
+             | select(.change.actions | index("create"))] | length')
+          if [ "$REPLACES_TEMPLATE" = "0" ]; then
+            echo "::notice::Instance template unchanged — no VM guard needed"
+            exit 0
+          fi
+          INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+            --region="$REGION" --project="$PROJECT" \
+            --format="value(instance.basename(),instanceStatus,currentAction)")
+          echo "::notice::Template will be replaced. MIG instances: $(echo "$INSTANCES" | awk 'NF' | paste -sd ';' -)"
+          STOPPED=$(echo "$INSTANCES" | awk '$2 ~ /^(TERMINATED|STOPPED)$/ && $3 == "NONE" {print $1}' | paste -sd, -)
+          if [ -z "$STOPPED" ]; then
+            echo "::notice::No stopped VM — the MIG recreates the running VM as usual"
+            exit 0
+          fi
+          echo "::notice::Starting $STOPPED so the MIG updates a running VM"
+          gcloud compute instance-groups managed start-instances "$MIG_NAME" \
+            --instances="$STOPPED" --region="$REGION" --project="$PROJECT" --quiet
+          gcloud compute instance-groups managed wait-until "$MIG_NAME" \
+            --stable --timeout=900 --region="$REGION" --project="$PROJECT"
+          echo "started=$STOPPED" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Apply
         run: terraform apply -auto-approve -input=false tfplan
         continue-on-error: false
@@ -230,3 +266,26 @@ jobs:
           TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT_ID }}
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+      - name: Wait for updated VM, then stop it again
+        if: steps.prestart.outputs.started != ''
+        env:
+          MIG_NAME: n8n-mig
+          N8N_HOST: ${{ vars.TF_VAR_n8n_public_host }}
+        run: |
+          set -eo pipefail
+          gcloud compute instance-groups managed wait-until "$MIG_NAME" \
+            --version-target-reached --timeout=1800 --region="$REGION" --project="$PROJECT"
+          gcloud compute instance-groups managed wait-until "$MIG_NAME" \
+            --stable --timeout=1800 --region="$REGION" --project="$PROJECT"
+          if [ -n "$N8N_HOST" ]; then
+            bash ../.github/scripts/wait-url.sh --url "https://$N8N_HOST/healthz" --code 200 --timeout 1800
+          fi
+          RUNNING=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+            --region="$REGION" --project="$PROJECT" \
+            --filter="instanceStatus=RUNNING" --format="value(instance.basename())" | paste -sd, -)
+          if [ -n "$RUNNING" ]; then
+            echo "::notice::First boot on the new template finished — stopping $RUNNING again"
+            gcloud compute instance-groups managed stop-instances "$MIG_NAME" \
+              --instances="$RUNNING" --region="$REGION" --project="$PROJECT" --quiet
+          fi
