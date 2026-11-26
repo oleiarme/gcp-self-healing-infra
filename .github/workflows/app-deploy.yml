@@ -40,7 +40,7 @@ jobs:
       ZONE: ${{ vars.TF_VAR_zone || 'us-central1-a' }}
       AR_REPO: n8n-docker
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Image refs: workflow input > GitHub var > default in
       # terraform/variables.tf (see scripts/resolve-image-refs.sh).
       - name: Resolve image refs
