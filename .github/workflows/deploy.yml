@@ -92,6 +92,10 @@ jobs:
       
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
+        with:
+          # Plain terraform binary: the wrapper would copy `terraform show
+          # -json tfplan` (sensitive values included) into step outputs.
+          terraform_wrapper: false
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v3
@@ -240,6 +244,10 @@ jobs:
             echo "::notice::Instance template unchanged — no VM guard needed"
             exit 0
           fi
+          # Let any running MIG action (e.g. a Stop VM in progress) finish
+          # first, so the VM state below is final.
+          gcloud compute instance-groups managed wait-until "$MIG_NAME" \
+            --stable --timeout=900 --region="$REGION" --project="$PROJECT"
           INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$REGION" --project="$PROJECT" \
             --format="value(instance.basename(),instanceStatus,currentAction)")
@@ -267,8 +275,10 @@ jobs:
           TF_VAR_slack_auth_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
+      # always(): also after a failed or cancelled apply — the VM must not be
+      # left running and unguarded; it is stopped only once n8n is healthy.
       - name: Wait for updated VM, then stop it again
-        if: steps.prestart.outputs.started != ''
+        if: always() && steps.prestart.outputs.started != ''
         env:
           MIG_NAME: n8n-mig
           N8N_HOST: ${{ vars.TF_VAR_n8n_public_host }}
@@ -280,6 +290,14 @@ jobs:
             --stable --timeout=1800 --region="$REGION" --project="$PROJECT"
           if [ -n "$N8N_HOST" ]; then
             bash ../.github/scripts/wait-url.sh --url "https://$N8N_HOST/healthz" --code 200 --timeout 1800
+          fi
+          # Restore "stopped" only inside the nightly window (19:00-07:59
+          # Lisbon). In the day — e.g. the deploy ran into the 08:30
+          # Cloud Scheduler start — the VM must stay up.
+          HOUR=$(TZ=Europe/Lisbon date +%-H)
+          if [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 19 ]; then
+            echo "::notice::Lisbon $(TZ=Europe/Lisbon date +%H:%M) is daytime — leaving the VM running"
+            exit 0
           fi
           RUNNING=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$REGION" --project="$PROJECT" \

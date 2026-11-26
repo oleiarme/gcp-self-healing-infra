@@ -89,15 +89,38 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          RUNNING=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+          INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
-            --filter="instanceStatus=RUNNING" \
-            --format="value(instance.basename())") || {
+            --format="value(instance.basename(),instanceStatus,currentAction)") || {
             echo "::error::Failed to list MIG instances"
             exit 1
           }
-          RUNNING=$(echo "$RUNNING" | awk 'NF' | paste -sd, -)
+
+          # Never stop a VM in the middle of its first boot: stopping a COS VM
+          # mid first boot breaks its boot disk (2026-11-26). Scheduled runs
+          # skip while the MIG works on an instance, and skip a VM started
+          # less than 40 min ago (e.g. by a guarded deploy, see deploy.yml);
+          # the next hourly run stops it.
+          if [ "$EVENT" = "schedule" ]; then
+            if echo "$INSTANCES" | awk 'NF && $NF != "NONE" {f=1} END {exit !f}'; then
+              echo "::notice::MIG action in progress — skipping stop"
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            for NAME in $(echo "$INSTANCES" | awk '$2 == "RUNNING" {print $1}'); do
+              STARTED=$(gcloud compute instances list --project="$GCP_PROJECT" \
+                --filter="name=$NAME" --format="value(lastStartTimestamp)")
+              AGE=$(( $(date +%s) - $(date -d "$STARTED" +%s) ))
+              if [ "$AGE" -lt 2400 ]; then
+                echo "::notice::$NAME started ${AGE}s ago (< 40 min) — skipping stop"
+                echo "changed=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+          fi
+
+          RUNNING=$(echo "$INSTANCES" | awk '$2 == "RUNNING" {print $1}' | paste -sd, -)
 
           if [ -z "$RUNNING" ]; then
             echo "::notice::No RUNNING instances in $MIG_NAME — skipping stop"
