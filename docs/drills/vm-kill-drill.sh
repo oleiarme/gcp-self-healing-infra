@@ -35,7 +35,11 @@
 #     roles/compute.instanceAdmin.v1).
 #   * curl for the external SLI probe.
 #   * jq for parsing gcloud JSON output.
-#   * The MIG must have target_size = 1 (enforced by Free Tier).
+#   * The MIG must have target_size = 1 (enforced by Free Tier) and its VM
+#     must be RUNNING. With the standby pool the Stop VM workflow stops the
+#     VM at night (target_size=0, target_stopped_size=1): run the drill
+#     inside the 09:00-19:00 Europe/Lisbon window, or run the "Start VM"
+#     workflow first.
 #
 # Usage
 #   export PROJECT_ID=my-project REGION=us-central1 MIG_NAME=n8n-mig \
@@ -96,6 +100,10 @@ if [ -z "${MIG_JSON}" ]; then
 fi
 
 TARGET_SIZE=$(echo "${MIG_JSON}" | jq -r '.targetSize')
+TARGET_STOPPED_SIZE=$(echo "${MIG_JSON}" | jq -r '.targetStoppedSize // 0')
+if [ "${TARGET_SIZE}" = "0" ] && [ "${TARGET_STOPPED_SIZE}" != "0" ]; then
+    fail "MIG VM is stopped in the standby pool (target_size=0, target_stopped_size=${TARGET_STOPPED_SIZE}). Run the \"Start VM\" workflow first, or run the drill between 09:00 and 19:00 Europe/Lisbon."
+fi
 if [ "${TARGET_SIZE}" != "1" ]; then
     fail "MIG target_size=${TARGET_SIZE}; drill assumes target_size=1 (Free Tier). Adjust the script before running against HA topology."
 fi
@@ -108,9 +116,10 @@ log "Step 0: record baseline"
 BASELINE_INSTANCE=$(gcloud compute instance-groups managed list-instances "${MIG_NAME}" \
     --region="${REGION}" \
     --project="${PROJECT_ID}" \
+    --filter="instanceStatus=RUNNING" \
     --format='value(instance)' | head -1)
 if [ -z "${BASELINE_INSTANCE}" ]; then
-    fail "MIG has no current instance — state is already broken, don't start the drill"
+    fail "MIG has no RUNNING instance — state is already broken (or the VM is still starting), don't start the drill"
 fi
 BASELINE_NAME=$(basename "${BASELINE_INSTANCE}")
 BASELINE_ZONE=$(echo "${BASELINE_INSTANCE}" | awk -F/ '{for (i=1;i<=NF;i++) if ($i=="zones") print $(i+1)}')
