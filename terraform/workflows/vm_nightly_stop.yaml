@@ -32,11 +32,8 @@ main:
           - deadline: ${sys.now() + 7200}
           - mig_url: ${"https://compute.googleapis.com/compute/v1/projects/" + project + "/regions/" + region + "/instanceGroupManagers/" + mig}
           - snoozed: false
-          - now_utc: ${time.format(sys.now())}
           - now_lisbon: ${time.format(sys.now(), "Europe/Lisbon")}
           - hour_lisbon: ${int(text.substring(now_lisbon, 11, 13))}
-          # Lisbon is UTC+0 or UTC+1.
-          - offset_h: ${(hour_lisbon - int(text.substring(now_utc, 11, 13)) + 24) % 24}
 
     - window_check:
         switch:
@@ -44,12 +41,14 @@ main:
             return: '${"skip - Lisbon " + now_lisbon + " is outside the 20:00-07:59 stop window"}'
 
     - list_instances:
-        call: http.post
-        args:
-          url: ${mig_url + "/listManagedInstances"}
-          auth:
-            type: OAuth2
-        result: lst
+        try:
+          call: http.post
+          args:
+            url: ${mig_url + "/listManagedInstances"}
+            auth:
+              type: OAuth2
+          result: lst
+        retry: ${http.default_retry}
 
     - assess:
         assign:
@@ -96,12 +95,14 @@ main:
           in: ${running}
           steps:
             - get_instance:
-                call: http.get
-                args:
-                  url: ${inst_url}
-                  auth:
-                    type: OAuth2
-                result: inst
+                try:
+                  call: http.get
+                  args:
+                    url: ${inst_url}
+                    auth:
+                      type: OAuth2
+                  result: inst
+                retry: ${http.default_retry}
             - age_test:
                 switch:
                   # Unknown start time = treat as just started.
@@ -164,12 +165,20 @@ main:
             - end_times:
                 assign:
                   # Next 09:05 / 15:05 Lisbon: tomorrow when run in the
-                  # evening, today when run after midnight.
-                  - base: ${if(hour_lisbon < 9, sys.now(), sys.now() + 86400)}
+                  # evening, today when run after midnight. Fresh clock (the
+                  # run may have waited), and the UTC offset (0 or 1 h) is
+                  # taken at the target instant, so DST nights are right.
+                  - t_now: ${sys.now()}
+                  - h_now: ${int(text.substring(time.format(t_now, "Europe/Lisbon"), 11, 13))}
+                  - base: ${if(h_now < 9, t_now, t_now + 86400)}
                   - base_date: ${text.substring(time.format(base, "Europe/Lisbon"), 0, 10)}
-                  - fast_end: ${time.format(time.parse(base_date + "T09:05:00Z") - offset_h * 3600)}
-                  - slo_end: ${time.format(time.parse(base_date + "T15:05:00Z") - offset_h * 3600)}
-                  - start: ${time.format(sys.now())}
+                  - fast_guess: ${time.parse(base_date + "T09:05:00Z")}
+                  - fast_off: ${(int(text.substring(time.format(fast_guess, "Europe/Lisbon"), 11, 13)) - 9 + 24) % 24}
+                  - fast_end: ${time.format(fast_guess - fast_off * 3600)}
+                  - slo_guess: ${time.parse(base_date + "T15:05:00Z")}
+                  - slo_off: ${(int(text.substring(time.format(slo_guess, "Europe/Lisbon"), 11, 13)) - 15 + 24) % 24}
+                  - slo_end: ${time.format(slo_guess - slo_off * 3600)}
+                  - start: ${time.format(t_now)}
             - snooze_fast:
                 switch:
                   - condition: ${len(fast) > 0}
@@ -227,14 +236,16 @@ main:
         next: list_instances
 
     - stop:
-        call: http.post
-        args:
-          url: ${mig_url + "/stopInstances"}
-          auth:
-            type: OAuth2
-          body:
-            instances: ${running}
-        result: op
+        try:
+          call: http.post
+          args:
+            url: ${mig_url + "/stopInstances"}
+            auth:
+              type: OAuth2
+            body:
+              instances: ${running}
+          result: op
+        retry: ${http.default_retry_non_idempotent}
 
     - done:
         return:
@@ -243,7 +254,15 @@ main:
           operation: ${op.body.name}
 
     - retry:
+        assign:
+          - now_lisbon: ${time.format(sys.now(), "Europe/Lisbon")}
+          - hour_lisbon: ${int(text.substring(now_lisbon, 11, 13))}
+    - retry_window:
         switch:
+          # Never stop a VM in the daytime, e.g. the one the 08:30 start
+          # brought up while a late manual run was still waiting.
+          - condition: ${not force and hour_lisbon >= 8 and hour_lisbon < 20}
+            return: '${"skip - Lisbon " + now_lisbon + " reached the day window while waiting"}'
           - condition: ${sys.now() > deadline}
             raise: "gave up: MIG busy or VM too young for 2 h"
     - wait:

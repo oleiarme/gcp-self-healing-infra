@@ -95,7 +95,7 @@ resource "google_cloud_scheduler_job" "vm_morning_start" {
 # stopInstances. The GitHub "Stop VM" workflow stays as a fallback.
 #
 # Cost: 2nd Cloud Scheduler job (3 free per billing account); the workflow
-# uses ~20 internal steps per run (5,000 free per month).
+# uses ~50-70 internal steps per run, ~2,000 a month (5,000 free per month).
 
 resource "google_project_service" "workflows" {
   project            = var.project_id
