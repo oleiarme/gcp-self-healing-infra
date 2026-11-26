@@ -252,7 +252,12 @@ if [ ! -f "$COMPOSE_DIR/docker-compose.yml" ]; then
 services:
   postgres:
     image: $${POSTGRES_IMAGE}
-    restart: on-failure
+    # "no": on a standby-pool restart dockerd re-runs on-failure containers
+    # killed at VM stop, before startup_cos.sh mounts the data disk. Seen
+    # 2026-11-26 09:26: postgres started 3 s before cloud-init, found an empty
+    # $DATA_DIR/postgres on tmpfs and ran initdb there. startup_cos.sh starts
+    # postgres itself, after the mount.
+    restart: "no"
     labels:
       container_name: "postgres"
     ports:
