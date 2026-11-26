@@ -332,6 +332,7 @@ gcloud secrets versions enable <previous_version> \
 | `terraform plan` review | 2-3 min |
 | `terraform apply` (infra changes) | 5-15 min |
 | New VM boot + startup.sh | 15-30 min (cold start) |
+| Start of a stopped VM (standby pool, daily morning start) | ~4 min (no image pull) |
 | n8n becomes healthy | Total: **20-45 min** |
 
 ### How to Monitor

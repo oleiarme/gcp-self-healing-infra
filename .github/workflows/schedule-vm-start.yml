@@ -1,6 +1,8 @@
-# Start VM: start the stopped MIG instance (standby pool) on morning
-# schedule or manual trigger. Fallback: resize MIG to 1 if it has no
-# instance at all (first run after migration, or VM deleted by hand).
+# Start VM: FALLBACK morning start and manual trigger. The primary start is
+# the Cloud Scheduler job at 08:30 Lisbon (terraform/scheduler.tf); GitHub's
+# cron is too unreliable for it. This workflow starts the stopped MIG
+# instance (standby pool) if it is still down, or resizes the MIG to 1 if it
+# has no instance at all (first run after migration, or VM deleted by hand).
 # Auth via Workload Identity Federation (same as deploy.yml, no JSON keys).
 # Disable via VM_SCHEDULE_ENABLED=false GitHub variable.
 
