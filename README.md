@@ -424,8 +424,8 @@ After `terraform apply`:
 
 To reduce Free Tier egress and IP costs when n8n is not actively used, the VM is stopped at night and started in the morning (daily, Europe/Lisbon time):
 
-- **Start: 08:45, Cloud Scheduler** job `n8n-vm-morning-start` (`terraform/scheduler.tf`). It PATCHes the MIG with `targetSize=1, targetStoppedSize=0`, which starts the stopped VM; n8n is healthy before 09:00. Cloud Scheduler fires on the minute.
-- **Stop: from 19:00, GitHub Actions** `schedule-vm-stop.yml` (hourly cron + Lisbon-time gate). GitHub runs scheduled workflows late or skips them (observed: ~2 runs a day), so the stop usually happens between 19:00 and 05:00. Alert snoozes end at fixed times: 09:05 (symptom alerts) and 15:05 (burn-rate alerts).
+- **Start: 08:30, Cloud Scheduler** job `n8n-vm-morning-start` (`terraform/scheduler.tf`). It PATCHes the MIG with `targetSize=1, targetStoppedSize=0`, which starts the stopped VM; n8n is healthy at ~08:35 (a cold start, e.g. after a template update, at ~08:50). Cloud Scheduler fires on the minute. The job reports only whether the PATCH was accepted; if the MIG then fails to start the VM, the uptime alerts after 09:05 report it.
+- **Stop: 19:00-07:59, GitHub Actions** `schedule-vm-stop.yml` (hourly cron + Lisbon-time gate, re-checked before the stop). GitHub runs scheduled workflows late or skips them (observed: ~2 runs a day), so the stop usually happens between 19:00 and 05:00. The window closes at 08:00 so a late run cannot stop the freshly started VM. Alert snoozes end at fixed times: 09:05 (symptom alerts) and 15:05 (burn-rate alerts).
 - **Fallback start: GitHub Actions** `schedule-vm-start.yml` (09:00-18:59 gate). It skips when the VM is already RUNNING.
 
 The night stop does not delete the VM: it is stopped into the MIG **standby pool** (`stop-instances`), so the boot disk with cached Docker images survives. The morning start then skips the image pull:

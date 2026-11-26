@@ -8,7 +8,7 @@ name: "Stop VM"
 
 on:
   schedule:
-    # Hourly; the gate job only lets runs through 19:00-08:59 Europe/Lisbon.
+    # Hourly; the gate job only lets runs through 19:00-07:59 Europe/Lisbon.
     - cron: '5 * * * *'   # :05, not :00 (GitHub's busiest minute)
   workflow_dispatch: {}
 
@@ -20,7 +20,9 @@ jobs:
   gate:
     # GitHub runs scheduled workflows hours late, so this workflow is
     # triggered hourly and decides by the actual Europe/Lisbon time at run
-    # time (handles winter/summer time). Stop window: 19:00-08:59.
+    # time (handles winter/summer time). Stop window: 19:00-07:59. It ends
+    # before the 08:30 Cloud Scheduler start (terraform/scheduler.tf), so a
+    # late stop run cannot switch off the freshly started VM.
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.check.outputs.run }}
@@ -33,7 +35,7 @@ jobs:
           RUN=false
           if [ "$EVENT" != "schedule" ]; then
             RUN=true
-          elif [ "$HOUR" -ge 19 ] || [ "$HOUR" -lt 9 ]; then
+          elif [ "$HOUR" -ge 19 ] || [ "$HOUR" -lt 8 ]; then
             RUN=true
           fi
           echo "::notice::Lisbon time $(TZ=Europe/Lisbon date +%H:%M) -> run=$RUN"
@@ -75,8 +77,18 @@ jobs:
 
       - name: Stop MIG instances
         id: stop
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -eo pipefail
+          # Re-check the window: a scheduled job can wait minutes for a
+          # runner after the gate passed (e.g. gate at 07:59, job at 08:31).
+          HOUR=$(TZ=Europe/Lisbon date +%-H)
+          if [ "$EVENT" = "schedule" ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 19 ]; then
+            echo "::notice::Lisbon time $(TZ=Europe/Lisbon date +%H:%M) is outside the stop window — skipping"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           RUNNING=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region="$GCP_REGION" \
             --project="$GCP_PROJECT" \
@@ -147,13 +159,15 @@ jobs:
           }
 
           # Fixed end times: Cloud Scheduler (terraform/scheduler.tf) starts
-          # the VM at 08:45 Lisbon and n8n is healthy ~4 min later, so the
+          # the VM at 08:30 Lisbon and n8n is healthy ~4 min later, so the
           # symptom alerts come back at 09:05 and the burn-rate alerts after
           # their 6 h window ages out (15:05). The GitHub Start VM workflow
           # is a late fallback; when it does start the VM it still shortens
           # both snoozes once n8n is healthy.
-          create_snooze "n8n planned nightly shutdown" "$(policies_for fast)" "$(next_lisbon 09:05)"
-          create_snooze "n8n planned nightly shutdown (SLO windows)" "$(policies_for slo)" "$(next_lisbon 15:05)"
+          FAST_END=$(next_lisbon 09:05)
+          SLO_END=$(next_lisbon 15:05)
+          create_snooze "n8n planned nightly shutdown" "$(policies_for fast)" "$FAST_END"
+          create_snooze "n8n planned nightly shutdown (SLO windows)" "$(policies_for slo)" "$SLO_END"
 
           echo "::notice::stop — stopping $RUNNING in $MIG_NAME (standby pool)"
 
