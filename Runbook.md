@@ -175,6 +175,7 @@ gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap \
 | Docker Hub rate limit | Pull error: `429 Too Many Requests` | Next run will use Artifact Registry mirror (populated after first successful push) |
 | AR image not yet mirrored | `⚠️ AR miss` in logs, pulling from Docker Hub | Normal on first deploy; AR populated on next CI run |
 | n8n crashes on startup | `docker compose logs n8n` shows panic | Check DB connectivity, encryption key, schema migration |
+| Boot disk broken: kernel never reaches cloud-init (VM RUNNING, MIG `VERIFYING`, Cloudflare 530) | `gcloud compute instances get-serial-port-output $INSTANCE --zone=$ZONE \| grep -E "verity\|Waiting for root"` shows `verity: Data device lookup failed (-ENODEV)` and `Waiting for root device /dev/dm-0` | `reset` does not help. Recreate: `gcloud compute instance-groups managed recreate-instances n8n-mig --instances=$INSTANCE --region=us-central1` (cold start ~16 min; data on the stateful disk is safe). Known cause: a stopped VM stopped again mid COS first boot after a template change — see [post-mortem 2026-11-26](docs/postmortems/2026-11-26-standby-vm-boot-hang.md) |
 
 ### Fix: Boot Disk Too Small
 
