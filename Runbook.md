@@ -684,6 +684,27 @@ export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig 
 | `gcloud compute instance-groups managed start-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Start stopped VM (fast start) |
 | `gcloud compute instance-groups managed resize n8n-mig --size=1 --region=$REGION` | Create VM when MIG has none (cold start, full image pull) |
 
+### SSH "host key changed" warning
+
+On COS, sshd uses the host keys in `/mnt/stateful_partition/etc/ssh/` (see
+`sudo sshd -T | grep ^hostkey`). They live on the boot disk, so they survive
+the nightly stop/start and change only when the VM is recreated (deploy with
+a new template, auto-healing). A warning right after a recreate is expected.
+
+The fingerprints that cloud-init prints to the serial console belong to the
+keys it writes to `/etc/ssh/`, which sshd does not use: they never match and
+cannot be used to check the warning (found 2026-11-27; the sshd restart from
+PR #134 did not help and was reverted). To compare, scan the live key through
+an IAP tunnel and read the key file sshd uses:
+
+```bash
+gcloud compute start-iap-tunnel $INSTANCE 22 --zone=$ZONE --local-host-port=localhost:22022 &
+ssh-keyscan -p 22022 -t ed25519 localhost | ssh-keygen -lf -
+kill %1   # stop the tunnel
+gcloud compute ssh $INSTANCE --zone=$ZONE --tunnel-through-iap \
+  --command="sudo ssh-keygen -lf /mnt/stateful_partition/etc/ssh/ssh_host_ed25519_key.pub"
+```
+
 ### Health Check URLs
 
 ```bash

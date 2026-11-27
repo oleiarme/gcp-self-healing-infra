@@ -21,13 +21,6 @@ echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # failed run is also retried on the next boot.
 rm -f /var/lib/cloud/instance/sem/config_scripts_user
 
-# cloud-init writes new SSH host keys on every boot (/var/lib/cloud is
-# tmpfs on COS), but sshd started ~30 s earlier and keeps the keys it
-# loaded. The fingerprints cloud-init prints to the serial console then
-# never match what clients see (found 2026-11-27). Restart sshd so it
-# serves the keys on disk, which are the ones the serial console shows.
-systemctl restart sshd || echo "⚠️ sshd restart failed"
-
 log_step() {
   echo "=== [$(date -u +%H:%M:%SZ)] $1 ==="
 }
