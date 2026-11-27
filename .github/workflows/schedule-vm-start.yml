@@ -35,7 +35,7 @@ jobs:
           RUN=false
           if [ "$EVENT" != "schedule" ]; then
             RUN=true
-          elif [ "$HOUR" -ge 9 ] && [ "$HOUR" -lt 19 ]; then
+          elif [ "$HOUR" -ge 9 ] && [ "$HOUR" -lt 20 ]; then
             RUN=true
           fi
           echo "::notice::Lisbon time $(TZ=Europe/Lisbon date +%H:%M) -> run=$RUN"

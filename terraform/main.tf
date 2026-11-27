@@ -232,9 +232,10 @@ resource "google_secret_manager_secret_iam_member" "cf_token_access" {
 # ==========================================
 # 1.5 BACKUP STORAGE
 # ==========================================
-# GCS bucket for n8n Postgres backups. The lifecycle rule auto-deletes
-# objects older than 7 days, keeping storage under the 5 GB Free-Tier
-# cap (~1 GB at 144 backups/day × 7 days × ~1 MB each).
+# GCS bucket for the daily n8n backup (one ~1.6 MB dump + one workflow
+# export per day). Retention: a backup is kept 30 days; with versioning
+# on, the delete makes it a noncurrent version, removed 30 days later.
+# About 100 MB in total, well under the 5 GB Free-Tier cap.
 # IMPORTANT: existing bucket must be imported before first apply:
 #   terraform import google_storage_bucket.backup <bucket-name>
 
@@ -254,7 +255,19 @@ resource "google_storage_bucket" "backup" {
 
   lifecycle_rule {
     condition {
-      age = 7
+      age = 30
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Without this rule every deleted backup stays forever as a hidden
+  # noncurrent version.
+  lifecycle_rule {
+    condition {
+      days_since_noncurrent_time = 30
+      with_state                 = "ARCHIVED"
     }
     action {
       type = "Delete"

@@ -8,7 +8,9 @@ name: "Stop VM"
 
 on:
   schedule:
-    # Hourly; the gate job only lets runs through 19:00-07:59 Europe/Lisbon.
+    # Hourly; the gate job only lets runs through 20:00-07:59 Europe/Lisbon.
+    # FALLBACK: the primary stop is the Cloud Scheduler + Workflows job at
+    # 20:00 Lisbon (terraform/scheduler.tf); this run finds no RUNNING VM then.
     - cron: '5 * * * *'   # :05, not :00 (GitHub's busiest minute)
   workflow_dispatch: {}
 
@@ -20,7 +22,7 @@ jobs:
   gate:
     # GitHub runs scheduled workflows hours late, so this workflow is
     # triggered hourly and decides by the actual Europe/Lisbon time at run
-    # time (handles winter/summer time). Stop window: 19:00-07:59. It ends
+    # time (handles winter/summer time). Stop window: 20:00-07:59. It ends
     # before the 08:30 Cloud Scheduler start (terraform/scheduler.tf), so a
     # late stop run cannot switch off the freshly started VM.
     runs-on: ubuntu-latest
@@ -35,7 +37,7 @@ jobs:
           RUN=false
           if [ "$EVENT" != "schedule" ]; then
             RUN=true
-          elif [ "$HOUR" -ge 19 ] || [ "$HOUR" -lt 8 ]; then
+          elif [ "$HOUR" -ge 20 ] || [ "$HOUR" -lt 8 ]; then
             RUN=true
           fi
           echo "::notice::Lisbon time $(TZ=Europe/Lisbon date +%H:%M) -> run=$RUN"
@@ -84,7 +86,7 @@ jobs:
           # Re-check the window: a scheduled job can wait minutes for a
           # runner after the gate passed (e.g. gate at 07:59, job at 08:31).
           HOUR=$(TZ=Europe/Lisbon date +%-H)
-          if [ "$EVENT" = "schedule" ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 19 ]; then
+          if [ "$EVENT" = "schedule" ] && [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 20 ]; then
             echo "::notice::Lisbon time $(TZ=Europe/Lisbon date +%H:%M) is outside the stop window — skipping"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -156,7 +158,7 @@ jobs:
           START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Next occurrence of HH:MM Europe/Lisbon, as UTC RFC3339. The stop
-          # runs 19:00-08:59 Lisbon (often after midnight, GitHub is late),
+          # runs 20:00-07:59 Lisbon (often after midnight, GitHub is late),
           # so "next" is today when we are still before HH:MM, else tomorrow.
           next_lisbon() {
             local hhmm="$1" day

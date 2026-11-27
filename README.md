@@ -364,7 +364,7 @@ A Cloud Function (`n8n-telegram-alert`) is triggered by Pub/Sub on deploy events
 │       ├── terraform.yml               # PR validation (fmt/validate/lint/scan)
 │       ├── digest-refresh.yml          # Weekly image digest auto-update
 │       ├── schedule-vm-start.yml       # Morning VM start (cost optimization)
-│       └── schedule-vm-stop.yml        # Night VM stop (19:00 Europe/Lisbon daily)
+│       └── schedule-vm-stop.yml        # Night VM stop fallback (20:00-07:59 Lisbon)
 ├── scripts/
 │   ├── startup_cos.sh                  # VM bootstrap on COS (disk mount, Docker, n8n)
 │   └── startup.sh                      # Legacy Debian bootstrap (for reference)
@@ -425,8 +425,9 @@ After `terraform apply`:
 To reduce Free Tier egress and IP costs when n8n is not actively used, the VM is stopped at night and started in the morning (daily, Europe/Lisbon time):
 
 - **Start: 08:30, Cloud Scheduler** job `n8n-vm-morning-start` (`terraform/scheduler.tf`). It PATCHes the MIG with `targetSize=1, targetStoppedSize=0`, which starts the stopped VM; n8n is healthy at ~08:35 (a cold start, e.g. after a template update, at ~08:50). Cloud Scheduler fires on the minute. The job reports only whether the PATCH was accepted; if the MIG then fails to start the VM, the uptime alerts after 09:05 report it.
-- **Stop: 19:00-07:59, GitHub Actions** `schedule-vm-stop.yml` (hourly cron + Lisbon-time gate, re-checked before the stop). GitHub runs scheduled workflows late or skips them (observed: ~2 runs a day), so the stop usually happens between 19:00 and 05:00. The window closes at 08:00 so a late run cannot stop the freshly started VM. Alert snoozes end at fixed times: 09:05 (symptom alerts) and 15:05 (burn-rate alerts).
-- **Fallback start: GitHub Actions** `schedule-vm-start.yml` (09:00-18:59 gate). It skips when the VM is already RUNNING.
+- **Stop: 20:00, Cloud Scheduler + Workflows** job `n8n-vm-nightly-stop` (`terraform/workflows/vm_nightly_stop.yaml`). The workflow waits (up to 2 h) until the MIG is idle and the VM is at least 40 min old — a VM is never stopped during its first boot — creates the alert snoozes, re-checks, then stops the VM. Alert snoozes end at fixed times: 09:05 (symptom alerts) and 15:05 (burn-rate alerts). Test without side effects: `gcloud workflows run n8n-vm-nightly-stop --location=us-central1 --data='{"dry_run":true,"force":true}'`.
+- **Fallback stop: 20:00-07:59, GitHub Actions** `schedule-vm-stop.yml` (hourly cron + Lisbon-time gate, same guards). GitHub runs scheduled workflows late or skips them (~2 runs a day). The window closes at 08:00 so a late run cannot stop the freshly started VM.
+- **Fallback start: GitHub Actions** `schedule-vm-start.yml` (09:00-19:59 gate). It skips when the VM is already RUNNING.
 
 The night stop does not delete the VM: it is stopped into the MIG **standby pool** (`stop-instances`), so the boot disk with cached Docker images survives. The morning start then skips the image pull:
 
@@ -437,7 +438,8 @@ The night stop does not delete the VM: it is stopped into the MIG **standby pool
 
 Disable by setting the GitHub variable 
 `VM_SCHEDULE_ENABLED=false` and pausing the Cloud Scheduler job
-(`gcloud scheduler jobs pause n8n-vm-morning-start --location=us-central1`).
+(`gcloud scheduler jobs pause n8n-vm-morning-start --location=us-central1`,
+`gcloud scheduler jobs pause n8n-vm-nightly-stop --location=us-central1`).
 
 ## License
 

@@ -384,34 +384,66 @@ To shrink a disk (e.g., from 20 GB to 10 GB):
 
 ## 7. Backup & DR
 
-### 7.1 Postgres Backup (Manual)
+### 7.1 Daily Backup (Postgres + workflows)
 
-The VM runs a backup script that dumps Postgres to GCS:
+The `n8n-backup.timer` on the VM runs daily at 19:30 Europe/Lisbon (before the
+20:00 nightly stop; a missed day is caught up after the next start). It uploads
+two objects to the backup bucket (`$BACKUP_BUCKET_NAME`; kept 30 days, then 30 more
+days as a noncurrent version — list those with `gcloud storage ls -a`):
+
+- `backup-<stamp>.sql.gz` — `pg_dumpall` (workflows, encrypted credentials, history);
+- `workflows-<stamp>.tar.gz` — one JSON per workflow (`n8n export:workflow --all --separate`).
+
+Each run writes one entry to the `n8n_backup` log; a failed run writes
+`CRITICAL: n8n backup failed - <step>` and fires the alert "n8n daily backup failed".
+Containers are named `n8n-<service>-1` (`n8n-postgres-1`, `n8n-n8n-1`), not `postgres`.
+Before 2026-11-27 the script ran `docker exec postgres` and never wrote a backup.
+
 ```bash
-# Check latest backup on GCS
-gcloud storage ls gs://$BACKUP_BUCKET_NAME/ | sort | tail -5
+# Check latest backups on GCS, and the last run results
+gcloud storage ls -l gs://$BACKUP_BUCKET_NAME/ | sort -k2 | tail -4
+gcloud logging read 'logName:"logs/n8n_backup"' --freshness=3d --limit=5   --format="value(timestamp,severity,textPayload)"
 
-# Trigger manual backup (SSH into VM)
-gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap \
-  --command="cd /opt/n8n && docker exec postgres pg_dumpall -U n8n | gzip > /tmp/n8n-manual.sql.gz && gsutil cp /tmp/n8n-manual.sql.gz gs://$BACKUP_BUCKET/manual-$(date +%Y%m%dT%H%M%S).sql.gz"
+# Trigger a backup now, and see its result
+gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap   --command="sudo systemctl start n8n-backup.service; sudo journalctl -u n8n-backup.service -n 30 --no-pager"
 ```
 
-### 7.2 Postgres Restore from GCS Backup
+### 7.2 Restore from GCS Backup
+
+COS has no `gsutil`/`gcloud` on the host: copy the file from a workstation.
+The dump has no `DROP` statements, so restore into an empty database:
+stop n8n, drop its database, restore, start n8n.
 
 ```bash
-# List available backups
-gcloud storage ls gs://$BACKUP_BUCKET_NAME/
+BACKUP_FILE="backup-<stamp>.sql.gz"
+gcloud storage cp gs://$BACKUP_BUCKET_NAME/$BACKUP_FILE .
+gcloud compute scp $BACKUP_FILE $INSTANCE:/tmp/ --zone=us-central1-a --tunnel-through-iap
 
-# Download and restore
-BACKUP_FILE="n8n-backup-20260429.sql.gz"
-
-gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap \
-  --command="
-    gsutil cp gs://$BACKUP_BUCKET/$BACKUP_FILE /tmp/ &&
-    docker exec -i postgres psql -U n8n -d postgres < <(gunzip -c /tmp/$BACKUP_FILE) &&
-    echo '✅ Restore complete'
-  "
+gcloud compute ssh $INSTANCE --zone=us-central1-a --tunnel-through-iap --command="
+  set -e
+  sudo docker stop n8n-n8n-1
+  sudo docker exec n8n-postgres-1 psql -U n8n -d postgres -c 'DROP DATABASE n8n'
+  # CREATE ROLE / CREATE DATABASE errors for objects that still exist are expected.
+  gunzip -c /tmp/$BACKUP_FILE | sudo docker exec -i n8n-postgres-1 psql -q -U n8n -d postgres
+  sudo docker exec n8n-postgres-1 psql -U n8n -d n8n -c 'select name, active from workflow_entity'
+  sudo docker start n8n-n8n-1
+  rm -f /tmp/$BACKUP_FILE
+"
 ```
+
+Credentials in the dump stay encrypted with `N8N_ENCRYPTION_KEY`; a restore
+on a new n8n needs the same key.
+
+Only workflows (no Postgres restore): copy `workflows-<stamp>.tar.gz` to the VM, then
+
+```bash
+mkdir /tmp/wf && tar xzf workflows-<stamp>.tar.gz -C /tmp/wf
+sudo docker cp /tmp/wf n8n-n8n-1:/tmp/wf
+sudo docker exec -u node n8n-n8n-1 n8n import:workflow --separate --input=/tmp/wf
+```
+
+Restore test 2026-11-27: the dump restored into a throwaway postgres container
+on the VM gave all 3 workflows and 8 credentials.
 
 ### 7.3 Persistent Disk Recovery
 
@@ -653,6 +685,43 @@ export INSTANCE=$(gcloud compute instance-groups managed list-instances n8n-mig 
 | `gcloud compute instance-groups managed stop-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Stop VM (save costs; VM kept in standby pool, docker images stay cached) |
 | `gcloud compute instance-groups managed start-instances n8n-mig --instances=$INSTANCE --region=$REGION` | Start stopped VM (fast start) |
 | `gcloud compute instance-groups managed resize n8n-mig --size=1 --region=$REGION` | Create VM when MIG has none (cold start, full image pull) |
+
+### SSH "host key changed" warning
+
+On COS, sshd uses the host keys in `/mnt/stateful_partition/etc/ssh/` (see
+`sudo sshd -T | grep ^hostkey`). They live on the boot disk, so they survive
+the nightly stop/start and change only when the VM is recreated (deploy with
+a new template, auto-healing). A warning right after a recreate is expected.
+
+The fingerprints that cloud-init prints to the serial console belong to the
+keys it writes to `/etc/ssh/`, which sshd does not use: they never match and
+cannot be used to check the warning (found 2026-11-27; the sshd restart from
+PR #134 did not help and was reverted). To compare, scan the live key through
+an IAP tunnel and read the key file sshd uses:
+
+```bash
+gcloud compute start-iap-tunnel $INSTANCE 22 --zone=$ZONE --local-host-port=localhost:22022 &
+ssh-keyscan -p 22022 -t ed25519 localhost | ssh-keygen -lf -
+kill %1   # stop the tunnel
+gcloud compute ssh $INSTANCE --zone=$ZONE --tunnel-through-iap \
+  --command="sudo ssh-keygen -lf /mnt/stateful_partition/etc/ssh/ssh_host_ed25519_key.pub"
+```
+
+### n8n log "Last session crashed" after the morning start
+
+Expected after the nightly stop; no action needed. n8n creates the file
+`crash.journal` at start and deletes it only at the end of a clean shutdown.
+At the 20:00 stop the VM powers off before n8n finishes: Docker kills a
+container 10 s after SIGTERM, and dockerd stops all containers at once, so
+postgres can close before n8n. At the next start n8n finds the file, logs
+"Last session crashed" and waits 10 s. Cost: the start is 10 s slower.
+
+Postgres shuts down cleanly in the same stop (no crash recovery at the next
+start): check for `database system was shut down at <time>` in the postgres
+log. Investigate only if postgres logs `was interrupted` or
+`automatic recovery in progress` instead (found 2026-11-27; a shutdown script
+that stops n8n first was considered and rejected: it may lose the race with
+dockerd, and it needs a VM recreate).
 
 ### Health Check URLs
 

@@ -1,0 +1,273 @@
+# Nightly stop of the n8n VM (called by Cloud Scheduler at 20:00 Lisbon).
+#
+# 1. Waits (up to 2 h) until the MIG has no action in progress and every
+#    RUNNING VM is at least 40 min old: stopping a COS VM in the middle of
+#    its first boot breaks the boot disk (post-mortem 2026-11-26).
+# 2. Creates the nightly alert snoozes (end 09:05 / 15:05 Lisbon), the same
+#    ones the GitHub "Stop VM" workflow creates.
+# 3. Re-checks the MIG, then stops the RUNNING VMs into the standby pool.
+#
+# Arguments (all optional):
+#   dry_run: true  -> do all checks, create nothing, stop nothing
+#   force:   true  -> also run outside the 20:00-07:59 Lisbon window
+main:
+  params: [args]
+  steps:
+    - args_default:
+        assign:
+          - a: {}
+    - args_given:
+        switch:
+          - condition: ${args != null}
+            assign:
+              - a: ${args}
+    - init:
+        assign:
+          - project: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - region: "us-central1"
+          - mig: "n8n-mig"
+          - min_age_s: 2400
+          - dry_run: ${default(map.get(a, "dry_run"), false)}
+          - force: ${default(map.get(a, "force"), false)}
+          - deadline: ${sys.now() + 7200}
+          - mig_url: ${"https://compute.googleapis.com/compute/v1/projects/" + project + "/regions/" + region + "/instanceGroupManagers/" + mig}
+          - snoozed: false
+          - now_lisbon: ${time.format(sys.now(), "Europe/Lisbon")}
+          - hour_lisbon: ${int(text.substring(now_lisbon, 11, 13))}
+
+    - window_check:
+        switch:
+          - condition: ${not force and hour_lisbon >= 8 and hour_lisbon < 20}
+            return: '${"skip - Lisbon " + now_lisbon + " is outside the 20:00-07:59 stop window"}'
+
+    - list_instances:
+        try:
+          call: http.post
+          args:
+            url: ${mig_url + "/listManagedInstances"}
+            auth:
+              type: OAuth2
+          result: lst
+        retry: ${http.default_retry}
+
+    - assess:
+        assign:
+          - managed: ${default(map.get(lst.body, "managedInstances"), [])}
+          - busy: false
+          - running: []
+          - young: false
+
+    - scan:
+        for:
+          value: mi
+          in: ${managed}
+          steps:
+            - check_busy:
+                switch:
+                  - condition: ${default(map.get(mi, "currentAction"), "NONE") != "NONE"}
+                    assign:
+                      - busy: true
+            - check_running:
+                switch:
+                  - condition: ${default(map.get(mi, "instanceStatus"), "") == "RUNNING"}
+                    assign:
+                      - running: ${list.concat(running, mi.instance)}
+
+    - wait_if_busy:
+        switch:
+          - condition: ${busy}
+            steps:
+              - log_busy:
+                  call: sys.log
+                  args:
+                    text: "MIG action in progress - waiting"
+              - to_retry_busy:
+                  next: retry
+
+    - nothing_to_stop:
+        switch:
+          - condition: ${len(running) == 0}
+            return: "nothing to stop: no RUNNING instance"
+
+    - check_age:
+        for:
+          value: inst_url
+          in: ${running}
+          steps:
+            - get_instance:
+                try:
+                  call: http.get
+                  args:
+                    url: ${inst_url}
+                    auth:
+                      type: OAuth2
+                  result: inst
+                retry: ${http.default_retry}
+            - age_test:
+                switch:
+                  # Unknown start time = treat as just started.
+                  - condition: ${map.get(inst.body, "lastStartTimestamp") == null}
+                    assign:
+                      - young: true
+                  - condition: ${sys.now() - time.parse(inst.body.lastStartTimestamp) < min_age_s}
+                    assign:
+                      - young: true
+
+    - wait_if_young:
+        switch:
+          - condition: ${young}
+            steps:
+              - log_young:
+                  call: sys.log
+                  args:
+                    text: "VM started less than 40 min ago - waiting"
+              - to_retry_young:
+                  next: retry
+
+    - snooze_or_stop:
+        switch:
+          - condition: ${dry_run}
+            return:
+              result: "dry_run: would snooze alerts and stop"
+              instances: ${running}
+          - condition: ${snoozed}
+            next: stop
+
+    - create_snoozes:
+        try:
+          steps:
+            - list_policies:
+                call: http.get
+                args:
+                  url: ${"https://monitoring.googleapis.com/v3/projects/" + project + "/alertPolicies"}
+                  query:
+                    pageSize: 200
+                  auth:
+                    type: OAuth2
+                result: pol
+            - group_policies:
+                assign:
+                  - fast: []
+                  - slo: []
+            - group_loop:
+                for:
+                  value: p
+                  in: ${default(map.get(pol.body, "alertPolicies"), [])}
+                  steps:
+                    - by_label:
+                        switch:
+                          - condition: ${default(map.get(p, ["userLabels", "nightly_snooze"]), "") == "fast"}
+                            assign:
+                              - fast: ${list.concat(fast, p.name)}
+                          - condition: ${default(map.get(p, ["userLabels", "nightly_snooze"]), "") == "slo"}
+                            assign:
+                              - slo: ${list.concat(slo, p.name)}
+            - end_times:
+                assign:
+                  # Next 09:05 / 15:05 Lisbon: tomorrow when run in the
+                  # evening, today when run after midnight. Fresh clock (the
+                  # run may have waited), and the UTC offset (0 or 1 h) is
+                  # taken at the target instant, so DST nights are right.
+                  - t_now: ${sys.now()}
+                  - h_now: ${int(text.substring(time.format(t_now, "Europe/Lisbon"), 11, 13))}
+                  - base: ${if(h_now < 9, t_now, t_now + 86400)}
+                  - base_date: ${text.substring(time.format(base, "Europe/Lisbon"), 0, 10)}
+                  - fast_guess: ${time.parse(base_date + "T09:05:00Z")}
+                  - fast_off: ${(int(text.substring(time.format(fast_guess, "Europe/Lisbon"), 11, 13)) - 9 + 24) % 24}
+                  - fast_end: ${time.format(fast_guess - fast_off * 3600)}
+                  - slo_guess: ${time.parse(base_date + "T15:05:00Z")}
+                  - slo_off: ${(int(text.substring(time.format(slo_guess, "Europe/Lisbon"), 11, 13)) - 15 + 24) % 24}
+                  - slo_end: ${time.format(slo_guess - slo_off * 3600)}
+                  - start: ${time.format(t_now)}
+            - snooze_fast:
+                switch:
+                  - condition: ${len(fast) > 0}
+                    steps:
+                      - post_fast:
+                          call: http.post
+                          args:
+                            url: ${"https://monitoring.googleapis.com/v3/projects/" + project + "/snoozes"}
+                            auth:
+                              type: OAuth2
+                            body:
+                              displayName: "n8n planned nightly shutdown"
+                              criteria:
+                                policies: ${fast}
+                              interval:
+                                startTime: ${start}
+                                endTime: ${fast_end}
+            - snooze_slo:
+                switch:
+                  - condition: ${len(slo) > 0}
+                    steps:
+                      - post_slo:
+                          call: http.post
+                          args:
+                            url: ${"https://monitoring.googleapis.com/v3/projects/" + project + "/snoozes"}
+                            auth:
+                              type: OAuth2
+                            body:
+                              displayName: "n8n planned nightly shutdown (SLO windows)"
+                              criteria:
+                                policies: ${slo}
+                              interval:
+                                startTime: ${start}
+                                endTime: ${slo_end}
+            - log_snoozed:
+                call: sys.log
+                args:
+                  text: ${"snoozes until " + fast_end + " / " + slo_end + " (fast " + string(len(fast)) + ", slo " + string(len(slo)) + " policies)"}
+        except:
+          as: e
+          steps:
+            # Same as the GitHub workflow: a failed snooze must not keep
+            # the VM running all night.
+            - log_snooze_error:
+                call: sys.log
+                args:
+                  severity: WARNING
+                  json: ${e}
+
+    - mark_snoozed:
+        assign:
+          - snoozed: true
+    # Re-check: a deploy may have started a MIG action meanwhile.
+    - recheck:
+        next: list_instances
+
+    - stop:
+        try:
+          call: http.post
+          args:
+            url: ${mig_url + "/stopInstances"}
+            auth:
+              type: OAuth2
+            body:
+              instances: ${running}
+          result: op
+        retry: ${http.default_retry_non_idempotent}
+
+    - done:
+        return:
+          result: "stopped"
+          instances: ${running}
+          operation: ${op.body.name}
+
+    - retry:
+        assign:
+          - now_lisbon: ${time.format(sys.now(), "Europe/Lisbon")}
+          - hour_lisbon: ${int(text.substring(now_lisbon, 11, 13))}
+    - retry_window:
+        switch:
+          # Never stop a VM in the daytime, e.g. the one the 08:30 start
+          # brought up while a late manual run was still waiting.
+          - condition: ${not force and hour_lisbon >= 8 and hour_lisbon < 20}
+            return: '${"skip - Lisbon " + now_lisbon + " reached the day window while waiting"}'
+          - condition: ${sys.now() > deadline}
+            raise: "gave up: MIG busy or VM too young for 2 h"
+    - wait:
+        call: sys.sleep
+        args:
+          seconds: 300
+    - again:
+        next: list_instances

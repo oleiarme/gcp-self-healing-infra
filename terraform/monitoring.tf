@@ -280,6 +280,67 @@ resource "google_monitoring_alert_policy" "startup_critical" {
 }
 
 # ------------------------------------------------------------
+# Log-based metric — daily backup failed
+# ------------------------------------------------------------
+# n8n-backup.sh (scripts/startup_cos.sh §12) writes one entry per run to
+# the "n8n_backup" log through the Logging API: the unit's journal does not
+# reach Cloud Logging on COS. Until 2026-11-27 the backup failed every day
+# and nobody saw it.
+
+resource "google_logging_metric" "n8n_backup_critical" {
+  name    = "n8n/backup_critical"
+  project = var.project_id
+  filter = join(" AND ", [
+    "resource.type=\"gce_instance\"",
+    "logName=\"projects/${var.project_id}/logs/n8n_backup\"",
+    "textPayload:\"CRITICAL: n8n backup failed\"",
+  ])
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "INT64"
+    unit         = "1"
+    display_name = "n8n backup failures"
+  }
+}
+
+resource "google_monitoring_alert_policy" "backup_critical" {
+  display_name = "n8n daily backup failed"
+  severity     = "WARNING"
+  combiner     = "OR"
+  user_labels = {
+    runbook = "gcp-self-healing-infra-runbook-md"
+    scope   = "backup"
+  }
+
+  conditions {
+    display_name = "backup CRITICAL > 0 in 5 min"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.n8n_backup_critical.name}\" resource.type=\"gce_instance\""
+      threshold_value = 0
+      comparison      = "COMPARISON_GT"
+      duration        = "0s"
+      trigger {
+        count = 1
+      }
+      aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.all_notification_channels
+  alert_strategy {
+    auto_close = "3600s"
+  }
+  documentation {
+    content   = "n8n-backup.sh did not write a complete backup to GCS (the log entry names the failed step: postgres dump, workflow export or upload). Re-run: `sudo systemctl start n8n-backup.service` on the VM. ${local.runbook_url_md} §7.1."
+    mime_type = "text/markdown"
+  }
+}
+
+# ------------------------------------------------------------
 # Log-ingestion liveness (Phase 4 follow-up)
 # ------------------------------------------------------------
 # A log-based metric only emits a datapoint when matching log lines are
