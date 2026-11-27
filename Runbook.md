@@ -387,7 +387,8 @@ To shrink a disk (e.g., from 20 GB to 10 GB):
 
 The `n8n-backup.timer` on the VM runs daily at 19:30 Europe/Lisbon (before the
 20:00 nightly stop; a missed day is caught up after the next start). It uploads
-two objects to the backup bucket (`$BACKUP_BUCKET_NAME`, 7-day lifecycle):
+two objects to the backup bucket (`$BACKUP_BUCKET_NAME`; kept 30 days, then 30 more
+days as a noncurrent version — list those with `gcloud storage ls -a`):
 
 - `backup-<stamp>.sql.gz` — `pg_dumpall` (workflows, encrypted credentials, history);
 - `workflows-<stamp>.tar.gz` — one JSON per workflow (`n8n export:workflow --all --separate`).
