@@ -777,53 +777,101 @@ echo "=== Setting up automated backups ==="
 
 cat <<'BACKUPSCRIPT' > "/var/lib/docker/compose/n8n/n8n-backup.sh"
 #!/bin/bash
-set -e
+# Daily n8n backup to GCS: pg_dumpall + one JSON per workflow.
+# Every run writes one entry to Cloud Logging (log "n8n_backup"); a failed
+# run writes "CRITICAL: n8n backup failed", which the n8n_backup_critical
+# alert (terraform/monitoring.tf) catches. This unit's journal does not
+# reach Cloud Logging on COS, so the entry is written via the API.
 set -o pipefail
 
 BACKUP_BUCKET="${BACKUP_BUCKET_NAME}"
-TEMP_BACKUP_FILE="/tmp/postgres-backup-$(date +%Y%m%dT%H%M%S).sql.gz"
+MD="http://metadata.google.internal/computeMetadata/v1"
+STAMP=$(date +%Y%m%dT%H%M%S)
+WORK=$(mktemp -d)
+trap 'rm -rf "$${WORK}"' EXIT
+ERRORS=""
 
-echo "Starting Postgres backup to GCS bucket: $${BACKUP_BUCKET}"
+fail() {
+  echo "❌ Error: $1" >&2
+  ERRORS="$${ERRORS}$1; "
+}
 
-# 1. Fetch metadata access token and project ID
-TOKEN_RESPONSE=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" || echo "")
-ACCESS_TOKEN=$(echo "$${TOKEN_RESPONSE}" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+md() {
+  curl -sf --retry 3 -H "Metadata-Flavor: Google" "$${MD}/$1"
+}
 
-if [ -z "$${ACCESS_TOKEN}" ]; then
-  echo "❌ Error: Failed to fetch access token from metadata server." >&2
-  exit 1
+# A fresh token per call: one fetched at the start can expire mid-run.
+token() {
+  md "instance/service-accounts/default/token" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+}
+
+upload() { # file, object name
+  local code
+  code=$(curl -s -o /dev/null -w "%%{http_code}" --retry 3 --retry-all-errors --max-time 300 \
+    -X POST -T "$1" \
+    -H "Authorization: Bearer $(token)" \
+    -H "Content-Type: application/gzip" \
+    "https://storage.googleapis.com/upload/storage/v1/b/$${BACKUP_BUCKET}/o?uploadType=media&name=$2")
+  if [ "$${code}" != "200" ]; then
+    fail "GCS upload of $2 failed with HTTP code $${code}"
+    return 1
+  fi
+  echo "✅ Uploaded gs://$${BACKUP_BUCKET}/$2"
+}
+
+log_result() { # severity, text
+  local text
+  text=$(printf '%s' "$2" | tr -d '"\\')
+  curl -s -o /dev/null --retry 3 --max-time 30 -X POST \
+    -H "Authorization: Bearer $(token)" \
+    -H "Content-Type: application/json" \
+    -d "{\"entries\":[{\"logName\":\"projects/$(md project/project-id)/logs/n8n_backup\",\"resource\":{\"type\":\"gce_instance\",\"labels\":{\"instance_id\":\"$(md instance/id)\",\"zone\":\"$(md instance/zone | sed 's#.*/##')\"}},\"severity\":\"$1\",\"textPayload\":\"$${text}\"}]}" \
+    "https://logging.googleapis.com/v2/entries:write" || echo "❌ Error: could not write the result to Cloud Logging" >&2
+}
+
+echo "Starting n8n backup to GCS bucket: $${BACKUP_BUCKET}"
+
+# Compose names the containers n8n-<service>-1; the old "docker exec
+# postgres" never matched, so no backup was written before 2026-11-27.
+container() {
+  docker ps -q --filter "label=com.docker.compose.project=n8n" \
+    --filter "label=com.docker.compose.service=$1" | head -n1
+}
+PG_CONTAINER=$(container postgres)
+N8N_CONTAINER=$(container n8n)
+
+# 1. Postgres dump: workflows, credentials (encrypted), execution history.
+#    grep -c, not -q: -q exits at the first match, gunzip gets SIGPIPE and
+#    pipefail turns that into a failure.
+DUMP="$${WORK}/backup-$${STAMP}.sql.gz"
+if [ -z "$${PG_CONTAINER}" ]; then
+  fail "postgres container is not running"
+elif ! docker exec "$${PG_CONTAINER}" pg_dumpall -U "${db_user}" | gzip > "$${DUMP}"; then
+  fail "pg_dumpall failed"
+elif ! gunzip -c "$${DUMP}" | grep -c "workflow_entity" >/dev/null; then
+  fail "dump is unreadable or has no workflow_entity table"
+else
+  upload "$${DUMP}" "backup-$${STAMP}.sql.gz"
 fi
 
-PROJECT_ID=$(curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/project-id" || echo "")
-if [ -z "$${PROJECT_ID}" ]; then
-  echo "❌ Error: Failed to fetch project ID from metadata server." >&2
-  exit 1
+# 2. Workflows as one JSON file each, also when the dump failed: readable
+#    and importable without a Postgres restore (Runbook 7.2).
+WF="$${WORK}/workflows-$${STAMP}.tar.gz"
+if [ -z "$${N8N_CONTAINER}" ]; then
+  fail "n8n container is not running - workflows not exported"
+elif ! docker exec -u node "$${N8N_CONTAINER}" sh -c \
+    'D=$(mktemp -d) && n8n export:workflow --all --separate --output="$D/" >/dev/null && tar czf - -C "$D" .; RC=$?; rm -rf "$D"; exit $RC' \
+    > "$${WF}"; then
+  fail "n8n export:workflow failed"
+else
+  upload "$${WF}" "workflows-$${STAMP}.tar.gz"
 fi
 
-# 2. Dump Postgres database
-docker exec postgres pg_dumpall -U "${db_user}" | gzip > "$${TEMP_BACKUP_FILE}"
-
-# 3. Upload to GCS via REST API
-OBJECT_NAME="backup-$(date +%Y%m%dT%H%M%S).sql.gz"
-echo "Uploading $${TEMP_BACKUP_FILE} as $${OBJECT_NAME}..."
-
-UPLOAD_URL="https://storage.googleapis.com/upload/storage/v1/b/$${BACKUP_BUCKET}/o?uploadType=media&name=$${OBJECT_NAME}"
-
-HTTP_CODE=$(curl -s -o /dev/null -w "%%{http_code}" \
-  -X POST \
-  --data-binary @"$${TEMP_BACKUP_FILE}" \
-  -H "Authorization: Bearer $${ACCESS_TOKEN}" \
-  -H "Content-Type: application/gzip" \
-  "$${UPLOAD_URL}")
-
-if [ "$${HTTP_CODE}" -ne 200 ]; then
-  echo "❌ Error: GCS upload failed with HTTP code $${HTTP_CODE}" >&2
-  rm -f "$${TEMP_BACKUP_FILE}"
+if [ -n "$${ERRORS}" ]; then
+  log_result ERROR "CRITICAL: n8n backup failed - $${ERRORS}"
   exit 1
 fi
-
-echo "✅ Backup successfully uploaded to gs://$${BACKUP_BUCKET}/$${OBJECT_NAME}"
-rm -f "$${TEMP_BACKUP_FILE}"
+log_result INFO "n8n backup ok: backup-$${STAMP}.sql.gz, workflows-$${STAMP}.tar.gz"
 BACKUPSCRIPT
 
 chmod +x "/var/lib/docker/compose/n8n/n8n-backup.sh"
@@ -831,21 +879,24 @@ chmod +x "/var/lib/docker/compose/n8n/n8n-backup.sh"
 # Write systemd service and timer files for Backups
 cat <<'EOF' > "/etc/systemd/system/n8n-backup.service"
 [Unit]
-Description=n8n Postgres Backup Service
+Description=n8n Postgres + workflows backup to GCS
 Requires=docker.service
 After=docker.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=15min
 ExecStart=/bin/bash /var/lib/docker/compose/n8n/n8n-backup.sh
 EOF
 
+# 19:30 Lisbon: the VM runs then (nightly stop at 20:00). A day the VM was
+# off at 19:30 is caught up after the next start (Persistent).
 cat <<'EOF' > "/etc/systemd/system/n8n-backup.timer"
 [Unit]
-Description=Run n8n Postgres Backup Daily
+Description=Run n8n backup daily at 19:30 Lisbon
 
 [Timer]
-OnCalendar=daily
+OnCalendar=*-*-* 19:30:00 Europe/Lisbon
 Persistent=true
 
 [Install]
