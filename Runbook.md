@@ -706,6 +706,22 @@ gcloud compute ssh $INSTANCE --zone=$ZONE --tunnel-through-iap \
   --command="sudo ssh-keygen -lf /mnt/stateful_partition/etc/ssh/ssh_host_ed25519_key.pub"
 ```
 
+### n8n log "Last session crashed" after the morning start
+
+Expected after the nightly stop; no action needed. n8n creates the file
+`crash.journal` at start and deletes it only at the end of a clean shutdown.
+At the 20:00 stop the VM powers off before n8n finishes: Docker kills a
+container 10 s after SIGTERM, and dockerd stops all containers at once, so
+postgres can close before n8n. At the next start n8n finds the file, logs
+"Last session crashed" and waits 10 s. Cost: the start is 10 s slower.
+
+Postgres shuts down cleanly in the same stop (no crash recovery at the next
+start): check for `database system was shut down at <time>` in the postgres
+log. Investigate only if postgres logs `was interrupted` or
+`automatic recovery in progress` instead (found 2026-11-27; a shutdown script
+that stops n8n first was considered and rejected: it may lose the race with
+dockerd, and it needs a VM recreate).
+
 ### Health Check URLs
 
 ```bash
